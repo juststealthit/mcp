@@ -1,0 +1,75 @@
+{
+  "name": "@juststealthit/mcp",
+  "version": "0.1.0",
+  "description": "The official Model Context Protocol server for Just Stealth It ($STEALTH): read coins, burns, staking, wallets and perps markets on every chain, and prepare launches, trades and stakes for your own wallet to sign.",
+  "license": "MIT",
+  "author": "Stealth",
+  "type": "module",
+  "homepage": "https://juststealthit.xyz",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/juststealthit/mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/juststealthit/mcp/issues"
+  },
+  "mcpName": "io.github.juststealthit/mcp",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "stealth",
+    "launchpad",
+    "memecoin",
+    "solana",
+    "evm",
+    "bonding-curve",
+    "staking",
+    "perps"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "stealth-mcp": "dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "server.json"
+  ],
+  "scripts": {
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json && node scripts/chmod-bin.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "node dist/cli.js",
+    "inspect": "npx @modelcontextprotocol/inspector node dist/cli.js",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@juststealthit/sdk": "^0.2.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@solana/web3.js": "^1.98.0",
+    "viem": "^2.30.0",
+    "ws": "^8.18.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.18.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
