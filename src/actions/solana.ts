@@ -53,7 +53,7 @@ export async function solanaRoute(ctx: StealthContext, mint: string, signal?: Ab
     if (via === null) throw new RefusedError("not_tradable", token.sol.tradeMessage ?? `${token.symbol} can't be traded here right now.`);
     return { route: via, decimals: token.decimals ?? PLATFORM_TOKEN_DECIMALS, symbol: token.symbol, name: token.name, onPlatform: true };
   }
-  const coin = await ctx.client.sol.market.coin(mint, { signal });
+  const coin = await ctx.client.sol.market.coin(mint, {}, { signal });
   if (coin.decimals === null) throw new RefusedError("unknown_decimals", `The decimals of ${coin.symbol || mint} aren't known, so an amount can't be converted safely.`);
   return { route: "jupiter" as const, decimals: coin.decimals, symbol: coin.symbol, name: coin.name, onPlatform: coin.onPlatform };
 }

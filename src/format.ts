@@ -4,7 +4,7 @@
  *
  * @module
  */
-import type { ApiCandle, ApiTrade, BaseToken, EvmApiToken, MarketToken, SolApiToken } from "@juststealthit/sdk/api";
+import { isOutsideToken, tokenChain, type ApiCandle, type ApiTrade, type BaseToken, type EvmApiToken, type MarketToken, type SolApiToken } from "@juststealthit/sdk/api";
 import { getChain } from "@juststealthit/sdk/utils";
 import { z } from "zod";
 
@@ -77,6 +77,8 @@ export const CoinSummarySchema = z.object({
   taxBps: nullableNumber,
   createdAt: nullableString,
   official: z.boolean(),
+  onPlatform: z.boolean().describe("Launched on Just Stealth It. False for an external coin trending on its chain"),
+  launchpad: nullableString.describe("For an external coin: the launchpad it came from, as the market data names it"),
   url: z.string(),
 });
 export type CoinSummary = z.infer<typeof CoinSummarySchema>;
@@ -91,7 +93,7 @@ export function venueOf(t: Pick<MarketToken, "sol" | "evm">): string | null {
   return null;
 }
 
-export const chainOf = (t: Pick<MarketToken, "sol" | "evm">): string => (t.sol ? "solana" : (t.evm?.chain ?? "unknown"));
+export const chainOf = (t: Pick<MarketToken, "sol" | "evm" | "outside">): string => tokenChain(t);
 
 export function launchTypeOf(t: MarketToken | SolApiToken | EvmApiToken): string | null {
   const m = t as MarketToken;
@@ -100,26 +102,31 @@ export function launchTypeOf(t: MarketToken | SolApiToken | EvmApiToken): string
 }
 
 export function coinSummary(t: MarketToken | SolApiToken | EvmApiToken, links: Links): CoinSummary {
-  const b = t as BaseToken & Pick<MarketToken, "sol" | "evm">;
+  const b = t as BaseToken & Pick<MarketToken, "sol" | "evm" | "outside">;
+  const chain = chainOf(b);
+  // an external row on the All list has no launchpad fields of its own: its zeros mean "not ours", not "zero"
+  const outside = isOutsideToken(b as MarketToken);
   return {
-    chain: chainOf(b),
+    chain,
     address: b.address,
     name: b.name ?? "",
     symbol: b.symbol ?? "",
-    stage: str(b.status) ?? "new",
+    stage: outside ? "external" : (str(b.status) ?? "new"),
     priceUsd: num(b.priceUsd),
     marketCapUsd: num(b.marketCapUsd),
     liquidityUsd: num(b.liquidityUsd),
     volume24hUsd: num(b.volume24hUsd),
     holders: num(b.holders),
     change: { m5: num(b.change?.m5), h1: num(b.change?.h1), h24: num(b.change?.h24) },
-    graduationProgress: num(b.graduation?.progress),
-    launchType: launchTypeOf(t),
-    venue: venueOf(b),
-    taxBps: num(b.taxBps),
+    graduationProgress: outside ? null : num(b.graduation?.progress),
+    launchType: outside ? null : launchTypeOf(t),
+    venue: outside ? null : venueOf(b),
+    taxBps: outside ? null : num(b.taxBps),
     createdAt: iso(b.createdAt),
     official: b.sol?.official === true,
-    url: links.coin(b.address),
+    onPlatform: !outside,
+    launchpad: outside ? str(b.outside?.launchpad) : null,
+    url: links.coin(b.address, chain, !outside),
   };
 }
 
@@ -181,6 +188,42 @@ export function riskFlags(r: { top10Pct?: number; devHoldingPct?: number; devSol
 }
 
 export const RiskFlagSchema = z.object({ line: z.string(), value: z.union([z.number(), z.boolean()]).nullable(), level: z.enum(["green", "amber", "red"]).nullable() });
+
+// ---- paging ----------------------------------------------------------------------------------------------------------------
+
+const CURSOR_PREFIX = "p1.";
+
+/**
+ * A page cursor for a tool that shows fewer rows than the API's page holds. It remembers the API's cursor and how many of that page's
+ * rows were already shown, so the next call starts at the first row not shown instead of skipping the rest of the page.
+ */
+export function pageCursor(apiCursor: string | null | undefined, skip: number): string {
+  return CURSOR_PREFIX + Buffer.from(JSON.stringify({ c: apiCursor ?? null, s: skip })).toString("base64url");
+}
+
+/** Reads a cursor from {@link pageCursor}. Anything else is taken as the API's own cursor, so older cursors keep working. */
+export function readPageCursor(cursor: string | undefined): { api: string | undefined; skip: number } {
+  if (!cursor?.startsWith(CURSOR_PREFIX)) return { api: cursor, skip: 0 };
+  try {
+    const v = JSON.parse(Buffer.from(cursor.slice(CURSOR_PREFIX.length), "base64url").toString("utf8")) as { c?: unknown; s?: unknown };
+    const skip = typeof v.s === "number" && Number.isInteger(v.s) && v.s >= 0 && v.s <= 10_000 ? v.s : 0;
+    return { api: typeof v.c === "string" ? v.c : undefined, skip };
+  } catch {
+    return { api: undefined, skip: 0 };
+  }
+}
+
+/**
+ * Shows up to `limit` rows of an API page, from where the cursor left off. `nextCursor` continues inside this page while rows are
+ * left, then moves to the API's next page. `left` counts this page's rows not shown yet.
+ */
+export function pageSlice<T>(items: T[], skip: number, limit: number, apiCursor: string | undefined, apiNext: string | null | undefined) {
+  const rest = items.slice(skip);
+  const shown = rest.slice(0, limit);
+  const left = rest.length - shown.length;
+  const nextCursor = left > 0 ? pageCursor(apiCursor, skip + shown.length) : (apiNext ?? null);
+  return { shown, left, nextCursor };
+}
 
 /** Trims an array for output, saying how much was left out. */
 export function take<T>(items: T[], limit: number): { items: T[]; truncated: number } {

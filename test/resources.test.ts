@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const text = (r: { contents: unknown[] }) => String((r.contents[0] as { text?: string }).text);
 
-import { THROTTLE_MS, parseStealthUri, throttle } from "../src/subscriptions.js";
+import { Subscriptions, THROTTLE_MS, parseStealthUri, throttle } from "../src/subscriptions.js";
 import { MINT, RISK, harness, solToken, tick, type Harness } from "./helpers.js";
 
 let h: Harness | null = null;
@@ -103,6 +103,77 @@ describe("resources", () => {
   it("refuses to subscribe to something that isn't a resource", async () => {
     h = await harness();
     await expect(h.client.subscribeResource({ uri: "https://example.com" })).rejects.toThrow(/Unknown resource/);
+  });
+});
+
+describe("subscription bookkeeping", () => {
+  const A = "0x8cf19c89ca5ca6fb137ebafdce681bcc48f67eba";
+  /** An EVM coin whose lookup waits until the test lets it go, and a counter of trade polls (one per running watcher). */
+  function slowEvm() {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    let polls = 0;
+    const evmTok = { ...solToken({ address: A }), sol: undefined, feeMode: "creator", evm: { chain: "base", chainId: 8453, native: "ETH", launchType: "creator", rules: 0, dex: "v4", feeVault: "0x", settlement: "0x" }, feePlan: null };
+    const routes = {
+      [`GET /evm/chains/base/tokens/${A}`]: async () => {
+        await gate;
+        return evmTok;
+      },
+      [`GET /evm/chains/base/tokens/${A}/trades`]: () => {
+        polls++;
+        return { items: [], nextCursor: null, total: 0 };
+      },
+    };
+    return { routes, release: () => release(), polls: () => polls };
+  }
+
+  const fakeCtx = async (routes: Record<string, unknown>) => {
+    h = await harness({ routes: routes as never, context: { evmPollMs: 10 } });
+    return h.ctx;
+  };
+
+  it("starts one watcher when the same resource is subscribed twice at once", async () => {
+    const s = slowEvm();
+    const ctx = await fakeCtx(s.routes);
+    const subs = new Subscriptions(ctx, async () => undefined);
+    const both = Promise.all([subs.subscribe(`stealth://coin/${A}`), subs.subscribe(`stealth://coin/${A}`)]);
+    s.release();
+    await both;
+    await tick(60);
+    const once = s.polls();
+    subs.unsubscribe(`stealth://coin/${A}`);
+    await tick(60);
+    // nothing keeps polling after the one unsubscribe
+    expect(s.polls()).toBe(once);
+    expect(subs.uris).toEqual([]);
+  });
+
+  it("starts nothing when unsubscribed or closed while the coin is still being looked up", async () => {
+    const s = slowEvm();
+    const ctx = await fakeCtx(s.routes);
+    const subs = new Subscriptions(ctx, async () => undefined);
+    const p = subs.subscribe(`stealth://coin/${A}`);
+    subs.unsubscribe(`stealth://coin/${A}`);
+    const other = new Subscriptions(ctx, async () => undefined);
+    const q = other.subscribe(`stealth://coin/${A}`);
+    other.close();
+    s.release();
+    await Promise.allSettled([p, q]);
+    await tick(60);
+    expect(s.polls()).toBe(0);
+    expect(subs.uris).toEqual([]);
+    expect(other.uris).toEqual([]);
+  });
+
+  it("caps how many resources one session watches", async () => {
+    const ctx = await fakeCtx({});
+    const subs = new Subscriptions(ctx, async () => undefined, 2);
+    await subs.subscribe("stealth://docs/fees");
+    await expect(subs.subscribe("stealth://docs/no-such-page")).rejects.toMatchObject({ code: "not_found" });
+    await subs.subscribe("stealth://docs/staking");
+    await expect(subs.subscribe("stealth://docs/venues")).rejects.toMatchObject({ code: "too_many_subscriptions" });
+    expect(subs.uris).toEqual(["stealth://docs/fees", "stealth://docs/staking"]);
+    subs.close();
   });
 });
 

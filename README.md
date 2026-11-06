@@ -4,7 +4,7 @@ The official [Model Context Protocol](https://modelcontextprotocol.io) server fo
 
 It lets any MCP client (a desktop assistant, a code editor, an agent framework) **read the whole platform** and **prepare actions on it safely**:
 
-- **Read everything**: coins on Solana, Robinhood Chain, BNB Chain, HyperEVM, Base and Arc; the board by stage and chain; a full coin report with price, market cap, volume, holders, graduation, launch type, fee routing and holder risk; candles, trades, top holders and traders, chart events; the $STEALTH buy back and burn; the Feed and its fee board; staking pools and positions; wallet analytics; read-only perps markets; platform status.
+- **Read everything**: coins on Solana, Robinhood Chain, BNB Chain, HyperEVM, Base and Arc, and the external coins trending on those chains; the board by stage and chain; Trending across chains; a full coin report with price, market cap, volume, holders, graduation, launch type, fee routing and holder risk; candles, trades, top holders and traders, chart events; the $STEALTH buy back and burn; the Feed and its fee board; staking pools and positions; a one-call wallet overview and wallet analytics; read-only perps markets; platform status. Ethereum, Arbitrum One, Avalanche C-Chain and X Layer are listed as coming soon.
 - **Do the maths**: live quotes, the anti-sniper fee line, fee splits per venue and tier, bonding-curve previews and staking estimates.
 - **Prepare, don't spend**: `prepare_buy`, `prepare_sell`, `prepare_stake`, `prepare_unstake` and `prepare_launch` return the transaction for **your own wallet** to sign, a plain-language summary and a link to finish on juststealthit.xyz. Nothing is signed or sent.
 - **Sign locally, only if you ask**: an opt-in mode signs prepared Solana actions with your local keystore wallet, inside SOL caps you set, after you confirm in the client.
@@ -155,11 +155,12 @@ Every tool has a zod-validated input schema, an output schema with structured co
 
 | Tool | What it returns |
 | --- | --- |
-| `search_coins` | Coins by name, ticker (`$` optional) or address prefix, across every chain |
-| `get_board` | The board by stage (new, graduating, graduated) and chain, sorted and filtered like the Coins page, with paging and counts |
-| `get_coin_report` | One coin, any chain: price, market cap, liquidity, volume, holders, graduation progress, venue and pair, tax and anti-sniper state, launch type and where creator fees go, holder risk with the token page's green / amber / red bands, buy-backs, holder rewards and multi-chain siblings. Any Solana token works; tokens launched elsewhere get market figures |
-| `get_candles` | OHLC candles from 1s to 1D |
-| `get_trades` | Trades, newest first, with anti-sniper and first-buy flags |
+| `search_coins` | Coins launched here, by name, ticker (`$` optional) or address prefix, across every live chain |
+| `get_board` | The board by stage (new, graduating, graduated) and chain, sorted and filtered like the Coins page, with paging and counts. The All list (every stage) mixes in external trending coins, marked `onPlatform: false` |
+| `get_trending` | Trending across chains, as the site shows it: coins launched here and external coins trending on Solana and the other live chains, each with its chain, launchpad and page. Filter by chain or by source |
+| `get_coin_report` | One coin, any chain: price, market cap, liquidity, volume, holders, graduation progress, venue and pair, tax and anti-sniper state, launch type and where creator fees go, holder risk with the token page's green / amber / red bands, buy-backs, holder rewards and multi-chain siblings. Coins launched elsewhere work too (any Solana token, or a coin trending on a live EVM chain) and get market figures, risk and their page |
+| `get_candles` | OHLC candles from 1m to 1D (the 1s interval is gone). External coins page back through their history with `to` |
+| `get_trades` | Trades, newest first, with anti-sniper and first-buy flags. Paged with `cursor`, without skipping rows when `limit` is small |
 | `get_holders` | Top holders with the pool, escrow, creator, locks, snipers and burns labelled |
 | `get_top_traders` | Traders ranked by PnL |
 | `get_chart_events` | The chart's bubbles: launcher trades, burns, graduation, marketing steps, claims, Feed callouts, posts on X |
@@ -171,18 +172,19 @@ Every tool has a zod-validated input schema, an output schema with structured co
 | `get_stealth_burns` | The $STEALTH buy back and burn: supply and share burned, the fees behind it, recent burns with transactions, the next run, the coins that fund it most |
 | `get_feed` | The Feed: launches, graduations, burns, claims and posts |
 | `get_fee_board` | Creator fees paid out over 7 or 30 days by launch type, chain and coin |
-| `get_platform_status` | Site state, every system's status and uptime, open incidents, open EVM chains, indexer lag |
+| `get_platform_status` | Site state, every system's status and uptime, open incidents, open and coming-soon EVM chains, indexer lag |
 | `get_platform_stats` | Platform totals: launches, graduations, volume, holder rewards, launch-type and pair mix |
-| `get_launch_options` | What a launch can pick right now: venues, tax tiers and who gets what, launch types, open chains |
-| `list_chains` | Every live and coming-soon chain |
+| `get_launch_options` | What a launch can pick right now: venues, tax tiers and who gets what, launch types, open and coming-soon chains |
+| `list_chains` | Every live and coming-soon chain, with `deploying` for the ones whose contracts are being deployed (Ethereum, Arbitrum One, Avalanche C-Chain). Coming-soon chains have no addresses and are refused as inputs |
 
 ### Staking and wallets
 
 | Tool | What it returns |
 | --- | --- |
-| `get_staking_pools` | Pools, today's rate and boosts, cooldown, totals and what the reward pool can still pay |
+| `get_staking_pools` | Whether staking is open (`state`: `open` or `not_open`; it's built and tested, and opens soon), and the pools: today's rate and boosts, cooldown, totals and what the reward pool can still pay |
 | `get_staking_position` | A wallet's stake, rewards, boost, unstakes on their way back and history |
 | `calc_staking_estimate` | What an amount would earn over N days at today's rate, stepping through boosts. An estimate, not a promise |
+| `get_wallet_overview` | One Solana wallet in one call: SOL, holdings by value, coins it launched with unclaimed fees, staking, and its hidden EVM wallet on every EVM chain. Parts that can't be read are listed, not shown as empty |
 | `get_wallet_analytics` | A Solana wallet's profile, PnL by period, positions, trades, rewards, portfolio, and its hidden EVM wallet |
 
 ### Perps (read-only)
@@ -207,7 +209,7 @@ There is no perps trading here: no orders, no accounts, nothing to sign.
 
 | Tool | What it returns |
 | --- | --- |
-| `prepare_buy` | A buy for your wallet to sign: on the coin's curve or pool, through Jupiter for other Solana tokens, or through the chain's router on EVM. Refused while the anti-sniper fee is above `maxFeeBps` |
+| `prepare_buy` | A buy for your wallet to sign: on the coin's curve or pool, through Jupiter for other Solana tokens, or through the chain's router on EVM. Refused while the anti-sniper fee is above `maxFeeBps`. An external coin on an EVM chain trades on the site through Relay: the refusal links its page |
 | `prepare_sell` | A sell by amount or by percentage of the wallet's balance |
 | `prepare_stake` | A $STEALTH stake, co-signed by the staking wallet, for your signature |
 | `prepare_unstake` | An unstake by amount or percentage of what's staked |
@@ -235,11 +237,13 @@ Every `prepare_*` result has the same shape: `summary`, `details`, `format` (`so
 | `stealth://coin/{address}` | A coin's full report, as JSON. **Subscribable**: Solana coins update from the platform's live stream, EVM coins by polling their trades |
 | `stealth://docs/{page}` | Short summaries of the [platform docs](https://github.com/juststealthit/docs), one per topic. Start with `stealth://docs/index` |
 | `stealth://staking/{pool}` | A staking pool, as JSON. Subscribable |
+| `stealth://feed` | The newest 20 Feed items. **Subscribable**: told when a new item lands on top |
+| `stealth://trending` | Trending across chains, as `get_trending` returns it. **Subscribable**: told when the top 20 change |
 | `stealth://chains` | The chain registry |
 
-Docs pages: `index`, `getting-started`, `launching`, `venues`, `curve-and-graduation`, `fees`, `launch-types`, `anti-sniper`, `marketing`, `multi-chain`, `evm-chains`, `stealth-bc-amm`, `trading`, `token-page`, `social-vaults`, `feed`, `telegram`, `cto`, `perps`, `staking`, `safety`, `addresses`, `faq`, `glossary`.
+Docs pages: `index`, `whats-new`, `getting-started`, `launching`, `venues`, `curve-and-graduation`, `fees`, `launch-types`, `anti-sniper`, `marketing`, `multi-chain`, `evm-chains`, `stealth-bc-amm`, `trading`, `external-tokens`, `token-page`, `social-vaults`, `feed`, `telegram`, `cto`, `perps`, `staking`, `safety`, `addresses`, `faq`, `glossary`.
 
-A subscriber gets `notifications/resources/updated` when the resource changes, at most once every two seconds per resource, and reads it again when it wants the new state. After the live stream reconnects, subscribers are told to read again, since messages sent while it was down are gone. Template arguments and prompt arguments support completion.
+A subscriber gets `notifications/resources/updated` when the resource changes, at most once every two seconds per resource, and reads it again when it wants the new state. After the live stream reconnects, subscribers are told to read again, since messages sent while it was down are gone. One session can watch up to 50 resources at once. Template arguments and prompt arguments support completion.
 
 ## Prompts
 
@@ -249,7 +253,8 @@ A subscriber gets `notifications/resources/updated` when the resource changes, a
 | `compare_coins` | `first`, `second` | Two coins side by side in one table |
 | `explain_launch_type` | `type` | What a launch type does with creator fees, with the docs attached and a worked example |
 | `daily_burn_report` | none | The last day of the $STEALTH buy back and burn |
-| `review_wallet` | `address` | A wallet's PnL, positions, rewards and trading style |
+| `review_wallet` | `address` | What a wallet holds now, then its PnL, positions, rewards and trading style |
+| `trending_now` | `chain?` | What's trending, launched here and elsewhere, with the facts behind the top coins |
 | `plan_launch` | `idea`, `chain?` | Walks through every launch choice, then prepares the launch for you to sign |
 
 Every prompt asks for facts with their numbers and links, and no predictions, promises or buy and sell calls.
@@ -272,23 +277,24 @@ Start the server with `--allow-signing` (or set `"mcp": { "allowSigning": true }
 1. The prepared action must exist, be unexpired and unused, and have been prepared **for the signing wallet**. Each one can be used once.
 2. Every transaction in it must be **paid by that wallet**. Staking transactions are signed exactly as the staking wallet co-signed them, never rebuilt.
 3. A trade's quoted fee must be within the `maxFeeBps` you accepted.
-4. Its SOL spend must be within **`mcp.maxSolPerTx`**, and within **`mcp.maxSolPerDay`** over a rolling 24 hours. Spends are recorded in `mcp-spend.json` (mode 0600) in the config directory, so the daily cap survives restarts. Defaults: 0.25 SOL per transaction and 1 SOL per day.
-5. **You confirm in the client** through MCP elicitation, where the client supports it. With `--require-elicitation`, a client that can't ask you is refused outright; otherwise the client's own tool approval is relied on (`sign_and_send` is annotated as destructive).
+4. Its SOL spend must be within **`mcp.maxSolPerTx`**, and within **`mcp.maxSolPerDay`** over a rolling 24 hours. Spends are recorded in `mcp-spend.json` (mode 0600) in the config directory, so the daily cap survives restarts, and the ledger is locked while a spend is reserved, so two servers sharing the folder (two clients, each starting its own) can't both spend the same allowance. Defaults: 0.25 SOL per transaction and 1 SOL per day.
+5. **You confirm in the client** through an MCP elicitation form, where the client supports one (a client that offers only URL elicitation counts as one that can't ask). With `--require-elicitation`, a client that can't ask you is refused outright; otherwise the client's own tool approval is relied on (`sign_and_send` is annotated as destructive).
 
 Spends count the SOL an action spends by intent (the buy amount, a first buy, a staking escrow deposit), not network fees and rent. A sell or unstake spends no SOL but still goes through every other check.
 
 More guard rails:
 
 - The passphrase comes from `STEALTH_KEYSTORE_PASSPHRASE` or a no-echo prompt on the controlling terminal, never from stdin or the protocol, and never from the client. The variable is removed from the environment once read. Without a passphrase, signing stays off and everything else works.
-- A wrong passphrase stops the server, rather than running in a mode you didn't ask for. A decrypted key that doesn't match the wallet's address is refused.
+- A wrong passphrase stops the server, rather than running in a mode you didn't ask for. A decrypted key that doesn't match the wallet's address is refused, and so is a keystore entry sealed with a scrypt cost below 2^14.
 - Caps are in SOL, so **only Solana actions are signed**. EVM transactions are always returned unsigned.
 - Signing is refused while the HTTP server is bound beyond loopback, and when `config.json` has problems.
 - `--read-only` turns signing off whatever the config says.
 
 ### Transport and logging
 
-- stdio: logs go to stderr only, never stdout, and to the client as MCP log notifications at the level it asks for. Credentials are redacted from every log line.
-- HTTP: binds to `127.0.0.1` by default; binding elsewhere needs a bearer token of 16+ characters, compared in constant time. Requests from browser origins other than loopback are refused unless allowed with `--allow-origin`, and a loopback server refuses foreign `Host` headers (DNS rebinding). Sessions are capped and closed when idle.
+- stdio: logs go to stderr only, never stdout, and to the client as MCP log notifications at the level it asks for. Anything a dependency prints to the console goes to stderr too. Credentials are redacted from every log line.
+- Tool errors come back as results with `isError: true`, a readable line and the error as JSON (also in `_meta["io.github.juststealthit/error"]`), never as structured content a client would check against the tool's output schema.
+- HTTP: binds to `127.0.0.1` by default; binding elsewhere needs a bearer token of 16+ characters, compared in constant time. Requests from browser origins other than loopback are refused unless allowed with `--allow-origin`, and a loopback server refuses foreign `Host` headers (DNS rebinding). Sessions are capped (sessions still starting count) and closed when idle; a session with a stream open isn't idle. Over HTTP, a session's log notifications carry only its own calls.
 - Reads use the SDK's retries with backoff (honouring `Retry-After`), a per-request timeout, cancellation from the client, and a short response cache.
 
 ## Configuration
@@ -297,8 +303,10 @@ The server shares its config directory with the Stealth CLI:
 
 | Platform | Directory |
 | --- | --- |
-| macOS, Linux | `$XDG_CONFIG_HOME/stealth`, else `~/.config/stealth` |
+| macOS, Linux | `$XDG_CONFIG_HOME/stealth` (when it's an absolute path), else `~/.config/stealth` |
 | Windows | `%APPDATA%\stealth` |
+
+The rule and the keystore format come from the SDK (`@juststealthit/sdk/keystore`), so the CLI follows the same ones. A 0.1 CLI folder at `$XDG_CONFIG_HOME/stealth` that already holds the files keeps being used.
 
 `config.json` (every field optional):
 
@@ -308,11 +316,12 @@ The server shares its config directory with the Stealth CLI:
   "defaultChain": "solana",
   "slippageBps": 300,
   "theme": "dark",
+  "wallet": "main",
   "mcp": { "allowSigning": false, "maxSolPerTx": 0.25, "maxSolPerDay": 1 }
 }
 ```
 
-`keystore.json` is written by the CLI and only read here: `{ version: 1, wallets: [{ name, kind: "solana" | "evm", address, crypto: { kdf: "scrypt", kdfparams: { n: 131072, r: 8, p: 1, salt }, cipher: "aes-256-gcm", iv, tag, ciphertext } }] }`, hex fields, mode 0600. Its public addresses are the default wallets for `prepare_*` and the wallet tools, so you don't have to paste them.
+`keystore.json` is written by the CLI and only read here: `{ version: 1, wallets: [{ name, kind: "solana" | "evm", address, crypto: { kdf: "scrypt", kdfparams: { n: 131072, r: 8, p: 1, salt }, cipher: "aes-256-gcm", iv, tag, ciphertext } }] }`, hex fields, mode 0600. Its public addresses are the default wallets for `prepare_*` and the wallet tools, so you don't have to paste them: `wallet` in `config.json` (the CLI's default wallet) first, when it's of the right kind, else the first of that kind.
 
 | Flag | Environment | Default |
 | --- | --- | --- |
@@ -328,7 +337,7 @@ The server shares its config directory with the Stealth CLI:
 | `--timeout <ms>` | | 15000 |
 | `--cache-ttl <ms>` | | 5000 |
 | `--allow-signing` | | off |
-| `--wallet <name>` | | the keystore's first Solana wallet |
+| `--wallet <name>` | | config.json's `wallet`, else the keystore's first Solana wallet |
 | | `STEALTH_KEYSTORE_PASSPHRASE` | prompt on the terminal |
 | `--require-elicitation` | | off |
 | `--read-only` | | off |
@@ -361,6 +370,8 @@ That puts the passphrase in a file on disk. Keep the wallet small, set tight cap
 - "What does a 3.25% tax tier pay the coin on Raydium LaunchLab versus Base?"
 - "What would a buy pay 4 seconds after a 1.25% EVM launch?"
 - "Is staking open? What would 50,000 $STEALTH earn over 90 days at today's rate?"
+- "What's trending across chains right now, and which of those coins launched here?"
+- "What do I hold right now, on Solana and in my EVM wallet?"
 - "Show my wallet's PnL over the last 30 days and my open positions."
 - "Which perps venues list BTC, and what's the open interest on each?"
 - "Quote 0.25 SOL of this coin, then prepare the buy for my wallet."
@@ -397,6 +408,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup (the SDK is published separatel
 
 [Website](https://juststealthit.xyz) · [Docs](https://github.com/juststealthit/docs) · [SDK](https://github.com/juststealthit/sdk) · [Contracts](https://github.com/juststealthit/smart-contracts) · [Status](https://juststealthit.xyz/status) · [X](https://x.com/juststealthit) · [Telegram](https://t.me/juststealthit)
 
-Just Stealth It is not affiliated with Pump.fun, Raydium, Meteora, Jupiter, Hyperliquid, Aster, Robinhood, BNB Chain, Base, Circle or Solana Foundation, nor with the makers of the MCP clients named above.
+Just Stealth It is not affiliated with Pump.fun, Raydium, Meteora, Jupiter, Relay, Hyperliquid, Aster, Robinhood, BNB Chain, Base, Circle or Solana Foundation, nor with the makers of the MCP clients named above.
 
 MIT License.

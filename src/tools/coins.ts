@@ -7,10 +7,10 @@
 import { isEvmTokenAddress, type EvmTokenDetail, type MarketCoinDetail, type SolTokenDetail } from "@juststealthit/sdk/api";
 import { sniperFeeBps, PLATFORM_SHARE_BPS, COIN_SHARE_BPS } from "@juststealthit/sdk/math";
 import { METEORA_TIERS, PUMP_SHARES, RAYDIUM_TIERS } from "@juststealthit/sdk/solana";
-import { isSolanaAddress } from "@juststealthit/sdk/utils";
+import { getChain, isSolanaAddress, requireLiveChain } from "@juststealthit/sdk/utils";
 import { z } from "zod";
 
-import { CHAIN_KEYS, EVM_CHAIN_KEYS, isEvmChain, type ChainKey, type EvmChain } from "../config.js";
+import { ALL_CHAIN_KEYS, EVM_CHAIN_KEYS, isEvmChain, type AnyChainKey, type ChainKey, type EvmChain } from "../config.js";
 import type { StealthContext } from "../context.js";
 import { NotFoundError, RefusedError } from "../errors.js";
 import {
@@ -28,7 +28,9 @@ import {
   venueOf,
 } from "../format.js";
 
-export const ChainSchema = z.enum(CHAIN_KEYS).describe("solana, robinhood, bnb, hyperevm, base or arc");
+export const ChainSchema = z
+  .enum(ALL_CHAIN_KEYS)
+  .describe("solana, robinhood, bnb, hyperevm, base or arc. ethereum, arbitrum, avalanche and xlayer are coming soon and refused until they open");
 export const AddressSchema = z
   .string()
   .trim()
@@ -37,35 +39,58 @@ export const AddressSchema = z
   .refine((a) => isSolanaAddress(a) || isEvmTokenAddress(a), "a Solana address (base58) or an EVM address (0x + 40 hex)")
   .describe("The coin's address: a Solana mint or an EVM token address");
 
+/** A live chain for a tool's `chain` input. A coming-soon chain is refused with what it is and when it opens. */
+export function liveChainOf(chain: AnyChainKey): ChainKey {
+  return requireLiveChain(chain).key as ChainKey;
+}
+
+/** Live chains for a tool's `chains` filter; a coming-soon one in the list is refused rather than silently dropped. */
+export function liveChainsOf(chains: AnyChainKey[] | undefined): ChainKey[] | undefined {
+  return chains?.map(liveChainOf);
+}
+
+/**
+ * A coin found by address. `sol` and `evm` were launched here; `external` is any other coin the market data knows: any Solana token
+ * (traded through Jupiter), or a coin trending on a live EVM chain (traded on the site, through Relay).
+ */
 export type ResolvedCoin =
   | { kind: "sol"; chain: "solana"; address: string; token: SolTokenDetail }
   | { kind: "evm"; chain: EvmChain; address: string; token: EvmTokenDetail; alsoOn?: EvmChain[] }
-  | { kind: "external"; chain: "solana"; address: string; coin: MarketCoinDetail };
+  | { kind: "external"; chain: ChainKey; address: string; coin: MarketCoinDetail };
 
 const opts = (signal?: AbortSignal) => ({ signal });
+const unlessMissing = (e: unknown) => {
+  if ((e as { status?: number }).status === 404) return null;
+  throw e;
+};
+
+/** The market data's page for a coin that didn't launch here, or `null` when it doesn't know the coin. */
+async function externalCoin(ctx: StealthContext, address: string, chain: ChainKey, signal?: AbortSignal): Promise<MarketCoinDetail | null> {
+  return ctx.client.sol.market.coin(address, chain === "solana" ? {} : { chain }, opts(signal)).catch(unlessMissing);
+}
 
 /**
- * Finds a coin. A Solana address is looked up on the launchpad first, then as any Solana token through Jupiter. An EVM address without
- * a chain is matched through the cross-chain search, then by asking each chain.
+ * Finds a coin. A Solana address is looked up on the launchpad first, then as any Solana token. An EVM address without a chain is
+ * matched on every live chain's launchpad, then among the external coins trending on each chain.
  */
-export async function resolveCoin(ctx: StealthContext, address: string, chain?: ChainKey, signal?: AbortSignal): Promise<ResolvedCoin> {
+export async function resolveCoin(ctx: StealthContext, address: string, chain?: AnyChainKey, signal?: AbortSignal): Promise<ResolvedCoin> {
+  const live = chain === undefined ? undefined : liveChainOf(chain);
   const solana = isSolanaAddress(address);
-  if (chain === "solana" || (!chain && solana)) {
+  if (live === "solana" || (!live && solana)) {
     if (!solana) throw new RefusedError("invalid_input", `${address} isn't a Solana address.`);
     const token = await ctx.client.sol.tokens.find(address, opts(signal));
     if (token) return { kind: "sol", chain: "solana", address, token };
-    const coin = await ctx.client.sol.market.coin(address, opts(signal)).catch((e: unknown) => {
-      if ((e as { status?: number }).status === 404) return null;
-      throw e;
-    });
+    const coin = await externalCoin(ctx, address, "solana", signal);
     if (coin) return { kind: "external", chain: "solana", address, coin };
     throw new NotFoundError(`No coin found at ${address} on Solana.`);
   }
   if (!isEvmTokenAddress(address)) throw new RefusedError("invalid_input", `${address} isn't an EVM address.`);
-  if (chain && isEvmChain(chain)) {
-    const token = await ctx.client.evm.chain(chain).findToken(address, opts(signal));
-    if (!token) throw new NotFoundError(`No coin found at ${address} on ${chain}.`);
-    return { kind: "evm", chain, address, token };
+  if (live && isEvmChain(live)) {
+    const token = await ctx.client.evm.chain(live).findToken(address, opts(signal));
+    if (token) return { kind: "evm", chain: live, address, token };
+    const coin = await externalCoin(ctx, address, live, signal);
+    if (coin) return { kind: "external", chain: live, address: coin.address || address, coin };
+    throw new NotFoundError(`No coin found at ${address} on ${live}.`);
   }
   // the same address can be a different coin on another chain (sibling multi-chain launches share factory addresses), so ask every
   // chain, and lead with the busiest one
@@ -74,7 +99,25 @@ export async function resolveCoin(ctx: StealthContext, address: string, chain?: 
   matches.sort((x, y) => (y.token.volume24hUsd ?? 0) - (x.token.volume24hUsd ?? 0) || (y.token.holders ?? 0) - (x.token.holders ?? 0));
   const first = matches[0];
   if (first) return { kind: "evm", chain: first.chain, address, token: first.token, alsoOn: matches.slice(1).map((m) => m.chain) };
-  throw new NotFoundError(`No coin found at ${address} on any EVM chain. Pass chain if you know it.`);
+  const outside = await Promise.allSettled(EVM_CHAIN_KEYS.map(async (c) => ({ c, coin: await externalCoin(ctx, address, c, signal) })));
+  const hits = outside.flatMap((r) => (r.status === "fulfilled" && r.value.coin ? [{ chain: r.value.c, coin: r.value.coin }] : []));
+  hits.sort((x, y) => (y.coin.volume24hUsd ?? y.coin.volumeUsd ?? 0) - (x.coin.volume24hUsd ?? x.coin.volumeUsd ?? 0));
+  const hit = hits[0];
+  if (hit) return { kind: "external", chain: hit.chain, address: hit.coin.address || address, coin: hit.coin };
+  throw new NotFoundError(`No coin found at ${address} on any live EVM chain. Pass chain if you know it.`);
+}
+
+/**
+ * The refusal for a trade this server doesn't build: an external coin on an EVM chain trades on the site through Relay (from SOL or
+ * the chain's coin, arriving in an EVM wallet). It says where to go instead.
+ */
+export function tradeOnSite(ctx: StealthContext, coin: Extract<ResolvedCoin, { kind: "external" }>) {
+  const page = ctx.links.coin(coin.address, coin.chain, coin.coin.onPlatform);
+  return new RefusedError(
+    "trade_on_site",
+    `${coin.coin.symbol || coin.address} is an external coin on ${getChain(coin.chain)?.name ?? coin.chain}. It trades on the site through Relay: ${page}. This server builds trades for coins launched here and for Solana tokens.`,
+    { page },
+  );
 }
 
 const settle = async <T>(p: Promise<T>): Promise<T | null> => {
@@ -94,7 +137,7 @@ export const CoinReportSchema = {
   symbol: z.string(),
   onPlatform: z.boolean().describe("Launched on Just Stealth It. False for a Solana token read through Jupiter"),
   official: z.boolean().describe("The platform's own coin, $STEALTH"),
-  stage: z.string(),
+  stage: z.string().describe("new, graduating or migrated (graduated) for a coin launched here; external for any other coin"),
   links: z.object({ page: z.string(), explorer: nullableString }),
   market: z.object({
     priceUsd: nullableNumber,
@@ -195,7 +238,7 @@ function launchTypeBlock(id: string | null) {
 
 export async function coinReport(ctx: StealthContext, coin: ResolvedCoin, signal?: AbortSignal): Promise<CoinReport> {
   const warnings: string[] = [];
-  if (coin.kind === "external") return externalReport(ctx, coin.coin, warnings);
+  if (coin.kind === "external") return externalReport(ctx, coin.chain, coin.coin, warnings);
 
   const t = coin.token;
   const chain = coin.chain;
@@ -252,7 +295,7 @@ export async function coinReport(ctx: StealthContext, coin: ResolvedCoin, signal
     onPlatform: true,
     official: sol?.sol.official === true,
     stage: t.status,
-    links: { page: ctx.links.coin(mint), explorer: ctx.links.address(chain, mint) },
+    links: { page: ctx.links.coin(mint, chain), explorer: ctx.links.address(chain, mint) },
     market: {
       priceUsd: num(price?.priceUsd) ?? num(t.priceUsd),
       priceNative: num(price?.priceSol) ?? num(t.priceEth),
@@ -295,29 +338,36 @@ export async function coinReport(ctx: StealthContext, coin: ResolvedCoin, signal
   };
 }
 
-function externalReport(ctx: StealthContext, c: MarketCoinDetail, warnings: string[]): CoinReport {
-  warnings.push("This token wasn't launched on Just Stealth It. Figures come from the wider Solana market and trades route through Jupiter.");
+function externalReport(ctx: StealthContext, chain: ChainKey, c: MarketCoinDetail, warnings: string[]): CoinReport {
+  const onSolana = chain === "solana";
+  warnings.push(
+    onSolana
+      ? "This token wasn't launched on Just Stealth It. Figures come from the wider Solana market, and trades route through Jupiter."
+      : `This coin wasn't launched on Just Stealth It: it is trending on ${getChain(chain)?.name ?? chain}. Figures come from that chain's market, and it trades on the site through Relay.`,
+  );
+  warnings.push("Just Stealth It's filters keep out a lot of noise but don't make an external coin safe. Nobody here checks the people behind it.");
   const flags = riskFlags({ top10Pct: c.top10Pct ?? undefined, devHoldingPct: c.creatorHoldPct ?? undefined });
   return {
-    chain: "solana",
+    chain,
     address: c.address,
     name: c.name,
     symbol: c.symbol,
     onPlatform: c.onPlatform,
     official: false,
-    stage: c.onCurve ? "new" : "external",
-    links: { page: ctx.links.coin(c.address), explorer: ctx.links.address("solana", c.address) },
+    // New, Graduating and Graduated are stages of coins launched here; whether this one is still on its curve is in graduation
+    stage: "external",
+    links: { page: ctx.links.coin(c.address, chain, c.onPlatform), explorer: ctx.links.address(chain, c.address) },
     market: {
       priceUsd: num(c.priceUsd),
       priceNative: null,
-      nativeSymbol: "SOL",
+      nativeSymbol: nativeSymbol(chain),
       marketCapUsd: num(c.marketCapUsd),
       liquidityUsd: num(c.liquidityUsd),
       volume24hUsd: num(c.volume24hUsd) ?? num(c.volumeUsd),
       buys24h: num(c.buys24h),
       sells24h: num(c.sells24h),
       holders: num(c.holders),
-      changePct: { m5: null, h1: num(c.change1hPct), h24: num(c.change24hPct) ?? num(c.changePct) },
+      changePct: { m5: num(c.change5mPct), h1: num(c.change1hPct), h24: num(c.change24hPct) ?? num(c.changePct) },
       livePrice: false,
     },
     graduation: { progress: num(c.curveProgress), raisedNative: null, targetNative: null, graduated: c.onCurve === false, graduatedAt: null },
@@ -332,9 +382,9 @@ function externalReport(ctx: StealthContext, c: MarketCoinDetail, warnings: stri
       antiSniper: { applies: false, windowSec: null, open: false, currentFeeBps: null },
     },
     launchType: { id: null, label: null, summary: null },
-    feeRouting: { coinBpsPerTrade: null, platformBpsPerTrade: null, venueBpsPerTrade: null, note: "Set by the token's own launchpad, not by Just Stealth It.", slices: [], creatorFees: null },
+    feeRouting: { coinBpsPerTrade: null, platformBpsPerTrade: null, venueBpsPerTrade: null, note: "Set by the coin's own launchpad. Just Stealth It takes no trading fee on external coins.", slices: [], creatorFees: null },
     risk: { holders: num(c.holders), flags: [...flags, { line: "Sniper wallets", value: num(c.sniperWallets), level: null }, { line: "Bundler wallets", value: num(c.bundlerWallets), level: null }], updatedAt: null },
-    extras: {},
+    extras: c.feeSharing ? { feeSharing: { launchpad: c.feeSharing.launchpad, sharedPct: c.feeSharing.sharedPct, locked: c.feeSharing.locked } } : {},
     warnings,
   };
 }

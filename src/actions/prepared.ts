@@ -38,8 +38,10 @@ export interface PreparedAction {
   bundle: boolean;
   /** A staking action is submitted through the staking API by its id. */
   stakingActionId: number | null;
-  /** The coin, for links. */
+  /** The coin. */
   mint: string | null;
+  /** The site page to show with the result: the coin's page, or the home page for staking. */
+  page: string | null;
 }
 
 export const PREPARED_TTL_MS = 75_000;

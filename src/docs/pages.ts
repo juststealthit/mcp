@@ -29,15 +29,32 @@ export const DOC_PAGES: DocPage[] = [
     "Just Stealth It docs",
     "What the platform is, and a map of every page",
     `
-Just Stealth It is a multi-chain memecoin launchpad and trading terminal. On **Solana** a coin launches on **Pump.fun**, **Raydium LaunchLab** or **Meteora**; it can also launch on **Robinhood Chain**, **BNB Chain**, **HyperEVM**, **Base** or **Arc**. Avalanche, Arbitrum and X Layer show as coming soon.
+Just Stealth It is a multi-chain memecoin launchpad and trading terminal. On **Solana** a coin launches on **Pump.fun**, **Raydium LaunchLab** or **Meteora**; it can also launch on **Robinhood Chain**, **BNB Chain**, **HyperEVM**, **Base** or **Arc**. Ethereum, Arbitrum One and Avalanche C-Chain are coming soon (their contracts are being deployed; addresses are published once checked), and so is X Layer.
+
+The coins trending on Solana and the other live chains show next to the coins launched here, on Coins → All and in Trending, and can be traded from their own page: see external-tokens. Just Stealth It takes no trading fee of its own.
 
 Every buy and sell pays a fee. The coin's part of that fee is its **creator fees**, and the coin's **launch type** decides where they go.
 
-Pages: getting-started, launching, venues, curve-and-graduation, fees, launch-types, anti-sniper, marketing, multi-chain, evm-chains, stealth-bc-amm, trading, token-page, social-vaults, feed, telegram, cto, perps, staking, safety, addresses, faq, glossary.
+Pages: whats-new, getting-started, launching, venues, curve-and-graduation, fees, launch-types, anti-sniper, marketing, multi-chain, evm-chains, stealth-bc-amm, trading, external-tokens, token-page, social-vaults, feed, telegram, cto, perps, staking, safety, addresses, faq, glossary.
 
 What's on right now: Solana venues on mainnet; EVM contracts on five chains (**not audited**); multi-chain launches. Built and currently off: fees routing home across chains, wallet payouts to other chains, social vaults, the Telegram private chat, Meteora's global tax. Staking is built and tested and opens soon. Stealth BC and Stealth AMM are coming soon and not deployed.
 
 Coins here are created by anyone, and you can lose everything you put in. Nothing here is financial advice or a promise of any return.
+`,
+  ),
+  page(
+    "whats-new",
+    "What's new",
+    "Recent changes, newest first",
+    `
+**November 2026**
+
+- **Trending coins from everywhere**: coins trending on Solana and the other live chains show on Coins → All and in Trending, next to coins launched here. New, Graduating and Graduated stay ours only.
+- **Trade external coins**: Solana coins through Jupiter; coins on other chains with SOL or that chain's coin, through Relay, arriving in your EVM wallet. No trading fee from Just Stealth It.
+- **Charts** open on 1 minute candles; the 1 second interval is gone. Candles form only when someone trades, and the whole history loads from launch. Bubbles mark the launcher's trades, events, callouts, posts on X and your own trades.
+- **$STEALTH buy-backs** are paid for by the coin's own fees; what's bought is burned, and part is set aside for future staking rewards. Staking is built and tested, and opens soon.
+- **Chains**: Avalanche, Arbitrum and X Layer show as coming soon; contracts are being deployed on Ethereum, Arbitrum One and Avalanche C-Chain.
+- **Fees**: no trading fee from Just Stealth It. One comes later, to fund referral rewards and callouts.
 `,
   ),
   page(
@@ -244,11 +261,30 @@ A quote shows what you receive, the tax on this trade, the price impact and the 
 `,
   ),
   page(
+    "external-tokens",
+    "External tokens",
+    "Coins trending elsewhere, and how they trade",
+    `
+Just Stealth It also shows coins that didn't launch here: the coins trending right now on Solana and the other live chains. They sit next to the coins launched here on **Coins → All** and in **Trending**, never on New, Graduating or Graduated. Solana comes first; other chains add a few coins each.
+
+Each one carries its launchpad's logo (Pump.fun, Bonk, Four.meme, Clanker, Zora and more), or none. A coin only gets in if it passes metrics chosen to keep out as much nonsense as possible, and drops out when it stops passing. That removes noise; it doesn't make a coin safe.
+
+| Coin on | Pay with | Routed by | Coins arrive in |
+| --- | --- | --- | --- |
+| Solana | SOL | Jupiter | Your Solana wallet |
+| Another chain | SOL, or that chain's coin | Relay | Your EVM wallet |
+
+There is **no trading fee from Just Stealth It** on external coins: only the pools' fees, Relay's fee across chains, and network fees, each in the quote. An external coin's page has its chart, figures and trade form, but no Activity or Holders tab.
+
+Nobody here checks the people behind external coins. Nothing here is advice or a promise of any return.
+`,
+  ),
+  page(
     "token-page",
     "The token page",
     "Chart, bubbles, activity, holders and risk",
     `
-**Chart**: candles from 1s to 1D, price or market cap, USD or the pair token. Bubbles mark the launcher's trades, platform events (burns, graduation, marketing steps, claims), Feed callouts, posts on X that reached the Stealth agent, and your own trades.
+**Chart**: candles from 1 minute to 1 day (the 1 second interval is gone), price or market cap, USD or the pair token. A candle only forms when someone trades, and the whole history loads from the coin's launch. Bubbles mark the launcher's trades, platform events (burns, graduation, marketing steps, claims), Feed callouts, posts on X that reached the Stealth agent, and your own trades.
 
 **Activity** tags: First buy, Launcher, Creator (after a CTO), Sniper (paid the sniper-window fee).
 
@@ -387,7 +423,9 @@ EVM (Robinhood Chain, Base, Arc and BNB Chain share most addresses): factory \`0
 - **When do holders get paid?** Every 10 minutes on Holders coins, for wallets with 10,000+ tokens, in the pair token.
 - **Why is the Raydium coin share smaller at high tiers?** Raydium caps the creator fee at 0.5%.
 - **Does the platform hold perps positions?** No, the venue does.
-- **Is staking open?** Not yet; it opens soon. stSTEALTH is the 1:1 receipt; unstaking takes 6 hours.
+- **Is staking open?** Not yet; it's built and tested, and opens soon. stSTEALTH is the 1:1 receipt; unstaking takes 6 hours.
+- **Does Just Stealth It take a trading fee?** No. One will be introduced later, to fund referral rewards and callouts.
+- **Can I trade a coin that didn't launch here?** Yes, from its page: Solana coins through Jupiter, coins on other chains through Relay.
 - **Are the contracts audited?** No.
 - **Did a person named on a coin agree to it?** No.
 - **Is any of this advice?** No. Coins are created by anyone, and you can lose everything you put in.

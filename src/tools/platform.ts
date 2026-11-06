@@ -4,17 +4,23 @@
  * @module
  */
 import { isFeedEvent, type FeedItem } from "@juststealthit/sdk/api";
-import { listChains } from "@juststealthit/sdk/utils";
+import { TAX_TIERS_BPS } from "@juststealthit/sdk/math";
+import { comingSoonChains, listChains } from "@juststealthit/sdk/utils";
 import { z } from "zod";
 
 import { iso, launchTypeLabel, nullableNumber, nullableString, num, str } from "../format.js";
+import { EVM_TYPES } from "./actions.js";
 import { READ, defineTool } from "./define.js";
+
+const ComingSoonSchema = z.object({ key: z.string(), name: z.string(), deploying: z.boolean() });
+/** Announced chains with nothing to use yet, from the SDK's registry. */
+const comingSoon = () => comingSoonChains().map((c) => ({ key: c.key, name: c.name, deploying: c.deploying }));
 
 export const getStealthBurns = defineTool({
   name: "get_stealth_burns",
   title: "$STEALTH burns",
   description:
-    "The $STEALTH buy back and burn: supply and how much is burned, fees that fund it, the buy-backs and burns so far with their transactions, when the next one runs, and the coins whose fees feed it the most. A burn reduces supply; it isn't a promise of any price or value.",
+    "The $STEALTH buy back and burn: supply and how much is burned, fees that fund it, the buy-backs and burns so far with their transactions, when the next one runs, the buy-back bot's state, and the coins whose fees feed it the most. Buy-backs are paid for by the coin's own fees. A burn reduces supply; it isn't a promise of any price or value.",
   input: {
     range: z.enum(["24h", "7d", "all"]).default("24h").describe("Window for the contributing coins"),
     recent: z.number().int().min(0).max(50).default(10).describe("How many recent burns to list"),
@@ -28,15 +34,28 @@ export const getStealthBurns = defineTool({
     nextBurn: z.object({ everyHours: nullableNumber, lastAt: nullableString, nextAt: nullableString, progress: nullableNumber }).nullable(),
     recentBurns: z.array(z.object({ time: nullableString, amount: nullableNumber, solSpent: nullableNumber, tx: z.string(), explorer: nullableString })),
     topCoins: z.array(z.object({ mint: z.string(), symbol: z.string(), feesSol: nullableNumber, sharePct: nullableNumber, url: z.string() })),
+    buybackBot: z
+      .object({
+        status: z.string().describe("live, paused, low_balance or not_configured"),
+        mode: z.string().describe("buy_burn burns what it buys; buy keeps it; buy_send sets it aside"),
+        everyMinutes: nullableNumber,
+        lastRunAt: nullableString,
+        nextAt: nullableString,
+        nextBuySol: nullableNumber,
+        totals: z.object({ buys: z.number(), solSpent: z.number(), tokensBurned: z.number() }),
+      })
+      .nullable()
+      .describe("The bot that runs the $STEALTH buy-backs, paid for by the coin's own fees"),
     updatedAt: nullableString,
   },
   annotations: READ,
   async run(a, { ctx, signal }) {
-    const [o, next, events, coins] = await Promise.all([
+    const [o, next, events, coins, bot] = await Promise.all([
       ctx.client.sol.burn.overview({ signal }),
       ctx.client.sol.burn.next({ signal }).catch(() => null),
       a.recent > 0 ? ctx.client.sol.burn.events({ limit: a.recent }, { signal }).catch(() => null) : Promise.resolve(null),
       a.topCoins > 0 ? ctx.client.sol.burn.coins({ range: a.range, limit: a.topCoins }, { signal }).catch(() => null) : Promise.resolve(null),
+      ctx.client.sol.burn.bot({ signal }).catch(() => null),
     ]);
     const burns = events?.items ?? o.recentBurns.map((b) => ({ ...b, solscan: b.solscan }));
     const recentBurns = burns.slice(0, a.recent).map((b) => ({ time: iso(b.time), amount: num(b.amount), solSpent: num(b.solSpent), tx: b.sig, explorer: str(b.solscan) }));
@@ -48,6 +67,17 @@ export const getStealthBurns = defineTool({
       nextBurn: next ? { everyHours: num(next.everyHours), lastAt: iso(next.lastAt), nextAt: iso(next.nextAt), progress: num(next.progress) } : null,
       recentBurns,
       topCoins: (coins?.items ?? []).map((c) => ({ mint: c.mint, symbol: c.symbol, feesSol: num(c.feesSol), sharePct: num(c.sharePct), url: ctx.links.coin(c.mint) })),
+      buybackBot: bot
+        ? {
+            status: String(bot.status),
+            mode: String(bot.mode),
+            everyMinutes: num(bot.everyMin),
+            lastRunAt: iso(bot.lastRunAt),
+            nextAt: iso(bot.nextAt),
+            nextBuySol: num(bot.nextBuySol),
+            totals: { buys: num(bot.totals?.buys) ?? 0, solSpent: num(bot.totals?.solSpent) ?? 0, tokensBurned: num(bot.totals?.tokensBurned) ?? 0 },
+          }
+        : null,
       updatedAt: iso(o.updatedAt),
     };
     const pct = data.supply.burnedPct;
@@ -55,7 +85,7 @@ export const getStealthBurns = defineTool({
   },
 });
 
-function feedItem(item: FeedItem) {
+export function feedItem(item: FeedItem) {
   if (isFeedEvent(item)) {
     const e = item.event;
     return {
@@ -159,7 +189,7 @@ export const getFeeBoard = defineTool({
 export const getPlatformStatus = defineTool({
   name: "get_platform_status",
   title: "Platform status",
-  description: "Whether the site is open, every system's state and uptime, open incidents, which EVM chains are switched on, and how far the Solana indexer is behind the chain.",
+  description: "Whether the site is open, every system's state and uptime, open incidents, which EVM chains are switched on and which are coming soon, and how far the Solana indexer is behind the chain.",
   input: {},
   output: {
     site: z.object({ comingSoon: z.boolean(), comingSoonUntil: nullableString, tagline: nullableString, officialCoin: nullableString }),
@@ -168,6 +198,7 @@ export const getPlatformStatus = defineTool({
     incidents: z.array(z.object({ title: z.string(), severity: z.string(), component: z.string(), status: z.string(), startedAt: nullableString })),
     solana: z.object({ network: nullableString, solUsd: nullableNumber, indexerLagSlots: nullableNumber, features: z.record(z.string(), z.string()) }).nullable(),
     evmChains: z.array(z.object({ id: z.string(), chainId: z.number(), name: z.string(), native: z.string(), dex: z.string() })),
+    comingSoonChains: z.array(ComingSoonSchema),
     statusPage: z.string(),
   },
   annotations: READ,
@@ -192,6 +223,7 @@ export const getPlatformStatus = defineTool({
           }
         : null,
       evmChains: evm?.enabled ? evm.chains.map((c) => ({ id: c.id, chainId: c.chainId, name: c.name, native: c.native, dex: c.dex === "infinity" ? "PancakeSwap Infinity" : "Uniswap v4" })) : [],
+      comingSoonChains: comingSoon(),
       statusPage: ctx.links.status(),
     };
     return { data, summary: `Overall: ${data.overall ?? "unknown"}. ${data.incidents.length} open incident${data.incidents.length === 1 ? "" : "s"}.${data.site.comingSoon ? " The site shows Coming soon." : ""}` };
@@ -264,7 +296,15 @@ export const getLaunchOptions = defineTool({
         launchTypes: z.array(z.object({ id: z.string(), label: nullableString, available: z.boolean(), default: z.boolean() })),
       })
       .nullable(),
-    evm: z.object({ enabled: z.boolean(), chains: z.array(z.object({ id: z.string(), chainId: z.number(), name: z.string(), native: z.string() })), launchTypes: z.array(z.string()), taxTiersBps: z.array(z.number()) }).nullable(),
+    evm: z
+      .object({
+        enabled: z.boolean(),
+        chains: z.array(z.object({ id: z.string(), chainId: z.number(), name: z.string(), native: z.string() })),
+        launchTypes: z.array(z.string()),
+        taxTiersBps: z.array(z.number()),
+        comingSoon: z.array(ComingSoonSchema).describe("Announced chains that take no launches yet"),
+      })
+      .nullable(),
   },
   annotations: READ,
   async run(_a, { ctx, signal }) {
@@ -289,8 +329,9 @@ export const getLaunchOptions = defineTool({
           ? {
               enabled: evm.enabled,
               chains: evm.chains.map((c) => ({ id: c.id, chainId: c.chainId, name: c.name, native: c.native })),
-              launchTypes: ["creator", "team", "marketing", "holders", "buyback"],
-              taxTiersBps: [125, 225, 325, 425, 575],
+              launchTypes: [...EVM_TYPES],
+              taxTiersBps: [...TAX_TIERS_BPS],
+              comingSoon: comingSoon(),
             }
           : null,
       },
@@ -301,14 +342,29 @@ export const getLaunchOptions = defineTool({
 export const listChainsTool = defineTool({
   name: "list_chains",
   title: "Chains",
-  description: "Every chain the platform runs on or has announced, with its gas coin, DEX and explorer. Coming-soon chains have nothing deployed and can't be used yet.",
+  description:
+    "Every chain the platform runs on or has announced, with its gas coin, DEX and explorer. Live chains take launches and trades. Coming-soon chains (Ethereum, Arbitrum One and Avalanche C-Chain, whose contracts are being deployed, and X Layer) have no addresses yet and can't be used: tools refuse them.",
   input: {},
   output: {
-    chains: z.array(z.object({ key: z.string(), name: z.string(), status: z.string(), chainId: nullableNumber, native: nullableString, dex: nullableString, explorer: nullableString })),
+    chains: z.array(
+      z.object({
+        key: z.string(),
+        name: z.string(),
+        family: z.string().describe("svm (Solana) or evm"),
+        status: z.enum(["live", "coming_soon"]),
+        deploying: z.boolean().describe("A coming-soon chain whose contracts are being deployed now. Its addresses are published once checked"),
+        chainId: nullableNumber,
+        native: nullableString,
+        dex: nullableString,
+        explorer: nullableString,
+      }),
+    ),
   },
   annotations: { ...READ, openWorldHint: false },
   async run() {
-    return { data: { chains: listChains().map((c) => ({ key: c.key, name: c.name, status: c.status, chainId: c.chainId, native: c.native, dex: c.dex, explorer: c.explorer })) } };
+    const chains = listChains().map((c) => ({ key: c.key, name: c.name, family: c.family, status: c.status, deploying: c.deploying, chainId: c.chainId, native: c.native, dex: c.dex, explorer: c.explorer }));
+    const soon = chains.filter((c) => c.status === "coming_soon").map((c) => c.name);
+    return { data: { chains }, summary: `${chains.length - soon.length} live chains. Coming soon: ${soon.join(", ")}.` };
   },
 });
 

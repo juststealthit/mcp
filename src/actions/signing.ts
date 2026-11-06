@@ -45,6 +45,16 @@ export interface SendResult {
   explorer: (string | null)[];
 }
 
+/**
+ * Whether the client can show the confirmation form. The confirmation is a form; a client that offers only URL elicitation can't
+ * show it. An empty `elicitation: {}` means form support, as the spec keeps it for older clients.
+ */
+export function canConfirm(server: Server): boolean {
+  const e = server.getClientCapabilities()?.elicitation as Record<string, unknown> | undefined;
+  if (!e) return false;
+  return Object.keys(e).length === 0 || !!e.form;
+}
+
 const LAMPORTS_PER_SOL = 1_000_000_000;
 export const solToLamports = (sol: number) => BigInt(Math.round(sol * LAMPORTS_PER_SOL));
 export const lamportsToSolText = (l: bigint) => formatUnits(l, 9);
@@ -102,8 +112,7 @@ export class LocalSigner {
 
   /** Asks the user to confirm through the client. */
   async confirm(server: Server, action: PreparedAction, signal?: AbortSignal): Promise<Confirmation> {
-    const caps = server.getClientCapabilities();
-    if (!caps?.elicitation) return "not_supported";
+    if (!canConfirm(server)) return "not_supported";
     const result = await server.elicitInput(
       {
         mode: "form",

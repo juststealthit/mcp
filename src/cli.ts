@@ -15,7 +15,7 @@ import { CHAIN_KEYS, EVM_CHAIN_KEYS, configDir, isEvmChain, loadConfig, type Cha
 import { StealthContext } from "./context.js";
 import { isLoopback, startHttpServer } from "./http.js";
 import { KeystoreError, pickWallet, readKeystore, unlockSolanaWallet } from "./keystore.js";
-import { Logger, isLogLevel, type LogLevel } from "./logger.js";
+import { Logger, isLogLevel, routeConsoleToLogger, type LogLevel } from "./logger.js";
 import { createStealthServer } from "./server.js";
 import { promptPassphrase } from "./tty.js";
 import { SERVER_NAME, VERSION } from "./version.js";
@@ -42,7 +42,7 @@ Data
 Signing (off by default)
   --allow-signing           Sign prepared Solana actions with a keystore wallet. The passphrase comes from
                             STEALTH_KEYSTORE_PASSPHRASE or a prompt on the terminal. Caps: config.json "mcp"
-  --wallet <name>           The keystore wallet to sign with (default: the first Solana wallet)
+  --wallet <name>           The keystore wallet to sign with (default: config.json's wallet, else the first Solana one)
   --require-elicitation     Refuse to sign for a client that can't show a confirmation
   --read-only               Never sign, even if config.json allows it
 
@@ -180,7 +180,9 @@ async function main() {
     try {
       const keystore = await readKeystore(dir);
       for (const w of keystore.warnings) logger.warn(w);
-      const wallet = pickWallet(keystore.wallets, "solana", flags.wallet);
+      // --wallet, else config.json's default wallet (the CLI's) when it's a Solana one, else the first Solana wallet
+      const fromConfig = config.wallet && keystore.wallets.some((w) => w.name === config.wallet && w.kind === "solana") ? config.wallet : undefined;
+      const wallet = pickWallet(keystore.wallets, "solana", flags.wallet ?? fromConfig);
       if (!wallet) signingOffReason = flags.wallet ? `No wallet named "${flags.wallet}" in the keystore.` : "The keystore has no Solana wallet.";
       else {
         const fromEnv = process.env.STEALTH_KEYSTORE_PASSPHRASE;
@@ -255,6 +257,7 @@ async function main() {
     stop = running.close;
     logger.notice(`${SERVER_NAME} ${VERSION} listening on ${running.url}${token ? " (bearer auth on)" : ""}`);
   } else {
+    routeConsoleToLogger(logger);
     const { server, dispose } = createStealthServer(ctx);
     const transport = new StdioServerTransport();
     stop = async () => {

@@ -17,6 +17,7 @@ afterEach(async () => {
 const READ_ONLY = [
   "search_coins",
   "get_board",
+  "get_trending",
   "get_coin_report",
   "get_candles",
   "get_trades",
@@ -33,6 +34,7 @@ const READ_ONLY = [
   "get_staking_pools",
   "get_staking_position",
   "calc_staking_estimate",
+  "get_wallet_overview",
   "get_wallet_analytics",
   "get_perps_markets",
   "get_perps_candles",
@@ -50,7 +52,11 @@ describe("server", () => {
     h = await harness();
     expect(h.client.getServerVersion()).toMatchObject({ name: "stealth-mcp", version: VERSION });
     expect(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version).toBe(VERSION);
-    expect(JSON.parse(readFileSync(new URL("../server.json", import.meta.url), "utf8")).version).toBe(VERSION);
+    const registry = JSON.parse(readFileSync(new URL("../server.json", import.meta.url), "utf8"));
+    expect(registry.version).toBe(VERSION);
+    expect(registry.packages[0].version).toBe(VERSION);
+    // the registry's limit
+    expect(registry.description.length).toBeLessThanOrEqual(100);
     expect(h.client.getInstructions()).toMatch(/never say a trade/i);
   });
 
@@ -84,10 +90,11 @@ describe("server", () => {
     h = await harness();
     const templates = (await h.client.listResourceTemplates()).resourceTemplates.map((r) => r.uriTemplate);
     expect(templates).toEqual(expect.arrayContaining(["stealth://coin/{address}", "stealth://docs/{page}", "stealth://staking/{pool}"]));
+    expect((await h.client.listResources()).resources.map((r) => r.uri)).toEqual(expect.arrayContaining(["stealth://feed", "stealth://trending"]));
     const resources = (await h.client.listResources()).resources.map((r) => r.uri);
     expect(resources).toEqual(expect.arrayContaining(["stealth://chains", "stealth://docs/index", "stealth://docs/fees", "stealth://docs/launch-types"]));
     const prompts = (await h.client.listPrompts()).prompts.map((p) => p.name);
-    expect(prompts).toEqual(["analyze_coin", "compare_coins", "explain_launch_type", "daily_burn_report", "review_wallet", "plan_launch"]);
+    expect(prompts).toEqual(["analyze_coin", "compare_coins", "explain_launch_type", "daily_burn_report", "review_wallet", "trending_now", "plan_launch"]);
   });
 
   it("completes prompt and template arguments", async () => {
@@ -96,6 +103,8 @@ describe("server", () => {
     expect(r.completion.values).toEqual(["buyback"]);
     const d = await h.client.complete({ ref: { type: "ref/resource", uri: "stealth://docs/{page}" }, argument: { name: "page", value: "st" } });
     expect(d.completion.values).toEqual(["stealth-bc-amm", "staking"]);
+    const c = await h.client.complete({ ref: { type: "ref/prompt", name: "trending_now" }, argument: { name: "chain", value: "b" } });
+    expect(c.completion.values).toEqual(["bnb", "base"]);
   });
 
   it("builds prompts that embed the docs they rely on", async () => {
@@ -104,6 +113,8 @@ describe("server", () => {
     expect(p.messages).toHaveLength(3);
     expect(JSON.stringify(p.messages[0])).toMatch(/Holders/);
     expect(p.messages[1]?.content).toMatchObject({ type: "resource", resource: { uri: "stealth://docs/launch-types" } });
+    const trending = await h.client.getPrompt({ name: "trending_now", arguments: { chain: "base" } });
+    expect(JSON.stringify(trending.messages)).toMatch(/get_trending with chains \[\\"base\\"\]/);
     const burn = await h.client.getPrompt({ name: "daily_burn_report" });
     expect(JSON.stringify(burn.messages)).toMatch(/get_stealth_burns/);
   });

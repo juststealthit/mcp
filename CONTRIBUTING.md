@@ -18,7 +18,7 @@ npm test
 npm run build
 ```
 
-`--install-links` copies the SDK in rather than linking it, so the SDK and the server share one copy of `@solana/web3.js` and `viem`. `--no-save` keeps `package.json` declaring `"@juststealthit/sdk": "^0.2.0"` and writes no lockfile pointing at a local path. Once the SDK is on npm, a plain `npm install` works.
+`--install-links` copies the SDK in rather than linking it, so the SDK and the server share one copy of `@solana/web3.js` and `viem`. `--no-save` keeps `package.json` declaring `"@juststealthit/sdk": "^0.3.0"` and writes no lockfile pointing at a local path. Once the SDK is on npm, a plain `npm install` works.
 
 | Script | What it runs |
 | --- | --- |

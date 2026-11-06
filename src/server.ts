@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { LoggingLevelSchema, SetLevelRequestSchema, type LoggingLevel } from "@modelcontextprotocol/sdk/types.js";
 
 import type { StealthContext } from "./context.js";
-import { LOG_LEVELS } from "./logger.js";
+import { LOG_LEVELS, logScope } from "./logger.js";
 import { registerPrompts } from "./prompts.js";
 import { registerResources } from "./resources.js";
 import { actionTools, signAndSend } from "./tools/actions.js";
@@ -21,15 +21,20 @@ import { stakingTools } from "./tools/staking.js";
 import { walletTools } from "./tools/wallets.js";
 import { SERVER_NAME, SERVER_TITLE, VERSION } from "./version.js";
 
-export const INSTRUCTIONS = `Just Stealth It ($STEALTH) is a multi-chain memecoin launchpad and trading terminal: coins launch on Solana (Pump.fun, Raydium LaunchLab, Meteora) and on Robinhood Chain, BNB Chain, HyperEVM, Base and Arc.
+export const INSTRUCTIONS = `Just Stealth It ($STEALTH) is a multi-chain memecoin launchpad and trading terminal: coins launch on Solana (Pump.fun, Raydium LaunchLab, Meteora) and on Robinhood Chain, BNB Chain, HyperEVM, Base and Arc. Ethereum, Arbitrum One, Avalanche C-Chain and X Layer are coming soon: nothing launches or trades there yet, and tools refuse them.
 
-- Read tools (search_coins, get_board, get_coin_report, get_candles, get_trades, get_holders, get_stealth_burns, get_staking_pools, get_wallet_analytics, get_perps_markets and the rest) only read public data.
-- get_coin_report is the best first call for any coin. Addresses work on any chain; tickers go through search_coins.
-- prepare_buy, prepare_sell, prepare_stake, prepare_unstake and prepare_launch build transactions for the user's own wallet and send nothing. Show the user the summary and next steps, and never say a trade, stake or launch happened until a signature confirms it.
+Picking a tool:
+- One coin: get_coin_report first. Addresses work on any chain; for a name or ticker, search_coins (coins launched here) or get_trending.
+- What's hot: get_trending (coins launched here and external coins trending on every live chain). Coins launched here by stage: get_board.
+- A wallet: get_wallet_overview for what it holds now, get_wallet_analytics for PnL, trades and rewards.
+- External coins (onPlatform false) have market figures, candles and a page, but no holders, trades or fee routing here. Solana ones trade through Jupiter; ones on EVM chains trade on the site through Relay, which this server doesn't build.
+- prepare_buy, prepare_sell, prepare_stake, prepare_unstake and prepare_launch build transactions for the user's own wallet and send nothing. Show the summary and next steps, and never say a trade, stake or launch happened until a signature confirms it.
 - sign_and_send exists only when the user turned local signing on. It asks the user to confirm and enforces their SOL caps.
+- Staking is built and tested and opens soon; get_staking_pools says whether it's open.
 - Perps data is read-only; there is no perps trading here.
-- Report facts with their numbers. Don't predict prices, promise returns or tell the user what to buy or sell: every trade is the user's own decision. Coins here are created by anyone and can lose all their value.
-- Docs summaries are resources at stealth://docs/{page}; start with stealth://docs/index.`;
+- Live resources: stealth://feed and stealth://trending (subscribe to hear of changes), stealth://coin/{address}. Docs summaries are at stealth://docs/{page}; start with stealth://docs/index.
+
+Report facts with their numbers. Don't predict prices, promise returns or tell the user what to buy or sell: every trade is the user's own decision. Coins here are created by anyone and can lose all their value.`;
 
 export interface StealthServer {
   server: McpServer;
@@ -73,6 +78,9 @@ export function createStealthServer(ctx: StealthContext): StealthServer {
   };
   const offSink = ctx.logger.addSink((level, message, data) => {
     if (!ready || !server.isConnected()) return;
+    // a line written for another session stays with that session
+    const scope = logScope.getStore();
+    if (scope !== undefined && scope !== server) return;
     if ((SEVERITY.get(level) ?? 0) < (SEVERITY.get(clientLevel) ?? 0)) return;
     void server.server.sendLoggingMessage({ level, logger: "stealth", data: data ? { message, ...data } : message }).catch(() => undefined);
   });

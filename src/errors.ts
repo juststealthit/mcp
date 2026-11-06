@@ -87,15 +87,42 @@ export function describeError(error: unknown): ErrorInfo {
   return { code: "internal_error", message, retryable: false };
 }
 
-/** A tool failure as MCP wants it: `isError`, a readable line, and the structured facts. */
+/** Where a tool error's structured facts sit in the result's `_meta`. */
+export const ERROR_META_KEY = "io.github.juststealthit/error";
+
+/**
+ * A tool failure as MCP wants it: `isError`, a readable line, and the structured facts as JSON text and in `_meta`.
+ *
+ * It carries no `structuredContent`: clients check structured content against the tool's output schema, which describes a success,
+ * so an error object there would fail that check and hide the real error behind a validation failure.
+ */
 export function toolError(error: unknown): CallToolResult {
   const info = describeError(error);
   const hint = info.retryable ? " This may pass on a later try." : "";
   return {
     isError: true,
-    content: [{ type: "text", text: `Error (${info.code}): ${info.message}${hint}` }],
-    structuredContent: { error: info },
+    content: [
+      { type: "text", text: `Error (${info.code}): ${info.message}${hint}` },
+      { type: "text", text: JSON.stringify({ error: info }) },
+    ],
+    _meta: { [ERROR_META_KEY]: info },
   };
+}
+
+/** The structured facts of a tool error result, as {@link toolError} wrote them. */
+export function errorOf(result: CallToolResult): ErrorInfo | null {
+  const meta = result._meta?.[ERROR_META_KEY];
+  if (meta && typeof meta === "object") return meta as ErrorInfo;
+  for (const c of result.content ?? []) {
+    if (c.type !== "text" || !c.text.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(c.text) as { error?: ErrorInfo };
+      if (parsed.error?.code) return parsed.error;
+    } catch {
+      /* not ours */
+    }
+  }
+  return null;
 }
 
 /** For resource reads and prompts: a JSON-RPC error with the closest standard code. */
@@ -106,5 +133,7 @@ export function toMcpError(error: unknown): McpError {
   if (info.code === "not_found" || info.status === 404) return new McpError(RESOURCE_NOT_FOUND, info.message, data);
   if (info.code === "invalid_input" || info.code === "invalid_request" || info.status === 400) return new McpError(ErrorCode.InvalidParams, info.message, data);
   if (info.code === "timeout") return new McpError(ErrorCode.RequestTimeout, info.message, data);
+  // refused on purpose (a cap, a closed feature): the request was understood and turned down, not a fault
+  if (error instanceof RefusedError) return new McpError(ErrorCode.InvalidRequest, info.message, data);
   return new McpError(ErrorCode.InternalError, info.message, data);
 }

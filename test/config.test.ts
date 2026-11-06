@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { DEFAULT_SIGNING_CAPS, configDir, loadConfig, resolveConfig } from "../src/config.js";
-import { tempDir } from "./helpers.js";
+import { StealthContext } from "../src/context.js";
+import { Logger } from "../src/logger.js";
+import { tempDir, testWallet, writeKeystore } from "./helpers.js";
 
 let cleanup: (() => Promise<void>) | null = null;
 afterEach(async () => {
@@ -80,5 +82,28 @@ describe("loadConfig", () => {
 
   it("strips a trailing slash from apiUrl", () => {
     expect(resolveConfig({ apiUrl: "http://localhost:3000/api//" }).apiUrl).toBe("http://localhost:3000/api");
+  });
+});
+
+describe("the default wallet", () => {
+  it("follows config.json's wallet, as the CLI sets it, when it is of the kind asked for", async () => {
+    const t = await tempDir();
+    try {
+      const a = await testWallet("first");
+      const b = await testWallet("second");
+      await writeKeystore(t.dir, [a.wallet, b.wallet]);
+      const logger = new Logger({ level: "emergency", write: () => undefined });
+      const ctx = new StealthContext({ config: resolveConfig({ wallet: "second" }), configDir: t.dir, logger });
+      expect(await ctx.defaultAddress("solana")).toBe(b.wallet.address);
+      expect(await ctx.defaultAddress("solana", "given")).toBe("given");
+      const plain = new StealthContext({ config: resolveConfig({}), configDir: t.dir, logger });
+      expect(await plain.defaultAddress("solana")).toBe(a.wallet.address);
+      // a default wallet of the other kind is passed over
+      await expect(new StealthContext({ config: resolveConfig({ wallet: "second" }), configDir: t.dir, logger }).defaultAddress("evm")).rejects.toMatchObject({ code: "owner_required" });
+      ctx.close();
+      plain.close();
+    } finally {
+      await t.cleanup();
+    }
   });
 });

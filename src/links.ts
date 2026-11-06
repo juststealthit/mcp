@@ -4,7 +4,7 @@
  *
  * @module
  */
-import { explorerUrl } from "@juststealthit/sdk/utils";
+import { coinPageUrl, explorerUrl } from "@juststealthit/sdk/utils";
 
 export class Links {
   readonly site: string;
@@ -13,9 +13,12 @@ export class Links {
     this.site = (siteUrl ?? siteFromApi(apiUrl)).replace(/\/+$/, "");
   }
 
-  /** A coin's token page, where it can be traded from a connected wallet. */
-  coin(address: string): string {
-    return `${this.site}/token/${address}`;
+  /**
+   * A coin's page on the site, where it can be traded from a connected wallet. A coin launched here has a token page (`?chain=` on
+   * EVM, since sibling multi-chain coins share an address); an external coin has a trending page.
+   */
+  coin(address: string, chain = "solana", onPlatform = true): string {
+    return coinPageUrl({ address, chain, onPlatform }, this.site);
   }
 
   perps(): string {

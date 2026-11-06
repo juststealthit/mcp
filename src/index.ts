@@ -17,6 +17,7 @@ export { createStealthServer, toolsFor, INSTRUCTIONS, READ_TOOLS, type StealthSe
 export { StealthContext, watchOnlySigner, type StealthContextOptions } from "./context.js";
 export { startHttpServer, isLoopback, type HttpOptions, type RunningHttpServer } from "./http.js";
 export {
+  ALL_CHAIN_KEYS,
   CHAIN_KEYS,
   EVM_CHAIN_KEYS,
   DEFAULT_SIGNING_CAPS,
@@ -32,11 +33,12 @@ export {
 } from "./config.js";
 export {
   KDF_DEFAULTS,
+  KDF_MIN_N,
   KeystoreError,
-  KeystoreFileSchema,
   decryptSecret,
   encryptSecret,
   evmAccountFrom,
+  parseKeystore,
   pickWallet,
   readKeystore,
   solanaKeypairFrom,
@@ -48,8 +50,8 @@ export {
 export { LocalSigner, type LocalSignerOptions, type SigningCaps } from "./actions/signing.js";
 export { SpendLedger, DailyCapError } from "./actions/ledger.js";
 export { PreparedStore, PREPARED_TTL_MS, type PreparedAction } from "./actions/prepared.js";
-export { Logger, LOG_LEVELS, type LogLevel, type LogSink } from "./logger.js";
-export { StealthMcpError, NotFoundError, RefusedError, describeError, toolError, toMcpError } from "./errors.js";
+export { Logger, LOG_LEVELS, logScope, routeConsoleToLogger, type LogLevel, type LogSink } from "./logger.js";
+export { ERROR_META_KEY, StealthMcpError, NotFoundError, RefusedError, describeError, errorOf, toolError, toMcpError, type ErrorInfo } from "./errors.js";
 export { DOC_PAGES, docPage } from "./docs/pages.js";
 export { Links } from "./links.js";
 export { SERVER_NAME, VERSION } from "./version.js";

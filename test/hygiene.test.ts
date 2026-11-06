@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 import { StealthApiError } from "@juststealthit/sdk";
 import { describe, expect, it } from "vitest";
 
-import { RefusedError, describeError, toolError, toMcpError } from "../src/errors.js";
-import { Logger, redact } from "../src/logger.js";
+import { RefusedError, describeError, errorOf, toolError, toMcpError } from "../src/errors.js";
+import { Logger, redact, routeConsoleToLogger } from "../src/logger.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -89,12 +89,36 @@ describe("logging and errors", () => {
     expect(lines).toHaveLength(2);
   });
 
+  it("sends a dependency's console output to the logger, never to stdout", () => {
+    const lines: string[] = [];
+    const original = process.stdout.write;
+    let stdout = 0;
+    process.stdout.write = (() => {
+      stdout++;
+      return true;
+    }) as never;
+    const undo = routeConsoleToLogger(new Logger({ level: "debug", write: (x) => lines.push(x) }));
+    try {
+      const c = console as unknown as Record<string, (...a: unknown[]) => void>;
+      c["log"]!("from a dependency", { n: 1 });
+      c["debug"]!("quiet detail");
+    } finally {
+      undo();
+      process.stdout.write = original;
+    }
+    expect(stdout).toBe(0);
+    expect(lines[0]).toMatch(/info {4}from a dependency \{ n: 1 \}/);
+    expect(lines[1]).toMatch(/debug {3}quiet detail/);
+  });
+
   it("maps errors to stable codes, for tools and for JSON-RPC", () => {
     const api = new StealthApiError(429, "rate_limited", "slow down", [], 3, { method: "GET", url: "u", requestId: "r1", attempt: 3 });
     expect(describeError(api)).toMatchObject({ code: "rate_limited", retryable: true, retryAfterSec: 3, requestId: "r1" });
     const t = toolError(new RefusedError("over_tx_cap", "too much"));
     expect(t.isError).toBe(true);
-    expect(t.structuredContent).toEqual({ error: { code: "over_tx_cap", message: "too much", retryable: false } });
+    expect(t.structuredContent).toBeUndefined();
+    expect(errorOf(t)).toEqual({ code: "over_tx_cap", message: "too much", retryable: false });
+    expect(JSON.parse((t.content[1] as { text: string }).text)).toEqual({ error: { code: "over_tx_cap", message: "too much", retryable: false } });
     expect(toMcpError(new StealthApiError(404, "not_found", "nope")).code).toBe(-32002);
     expect(toMcpError(new RangeError("bad")).code).toBe(-32602);
   });

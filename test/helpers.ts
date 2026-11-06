@@ -4,12 +4,13 @@ import path from "node:path";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ElicitRequestSchema, type ClientCapabilities, type ElicitResult } from "@modelcontextprotocol/sdk/types.js";
+import { ElicitRequestSchema, type CallToolResult, type ClientCapabilities, type ElicitResult } from "@modelcontextprotocol/sdk/types.js";
 import { Keypair, PublicKey, SystemProgram, Transaction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 
 import { SpendLedger } from "../src/actions/ledger.js";
 import { LocalSigner } from "../src/actions/signing.js";
 import { resolveConfig, type ConfigFile } from "../src/config.js";
+import { errorOf } from "../src/errors.js";
 import { StealthContext, type StealthContextOptions } from "../src/context.js";
 import { encryptSecret, type KeystoreWallet } from "../src/keystore.js";
 import { Logger } from "../src/logger.js";
@@ -42,7 +43,7 @@ export function fakeApi(routes: Record<string, Reply>) {
     const isApi = url.origin === "https://juststealthit.xyz";
     const route = isApi ? (routes[`${method} ${local}${url.search}`] ?? routes[`${method} ${local}`]) : routes[`${method} ${url.origin}${url.pathname}`];
     if (route === undefined) return new Response(JSON.stringify({ error: "not_found", message: `no route for ${method} ${url.href}` }), { status: 404 });
-    const out = typeof route === "function" ? (route as (c: Call) => unknown)(call) : route;
+    const out = typeof route === "function" ? await (route as (c: Call) => unknown)(call) : route;
     const r = (out && typeof out === "object" && "__reply" in out ? out : { status: 200, body: out }) as { status: number; body: unknown };
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { "content-type": "application/json" } });
   }) as typeof globalThis.fetch;
@@ -208,9 +209,11 @@ export async function call<T = Record<string, unknown>>(h: Harness, name: string
 
 /** Calls a tool that should fail, and returns its error. */
 export async function callError(h: Harness, name: string, args: Record<string, unknown> = {}) {
-  const r = await h.client.callTool({ name, arguments: args });
+  const r = (await h.client.callTool({ name, arguments: args })) as CallToolResult;
   if (!r.isError) throw new Error(`${name} should have failed`);
-  return { text: (r.content as { text: string }[])[0]?.text ?? "", error: (r.structuredContent as { error?: { code: string; message: string } } | undefined)?.error };
+  // an error result never carries structured content: clients would check it against the success schema
+  if (r.structuredContent !== undefined) throw new Error(`${name}: an error result must not carry structuredContent`);
+  return { text: (r.content as { text: string }[])[0]?.text ?? "", error: errorOf(r) ?? undefined };
 }
 
 /** A temporary config dir. Deleted by `cleanup`. Test keys are generated at run time and never written anywhere else. */

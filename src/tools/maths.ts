@@ -28,7 +28,7 @@ import { z } from "zod";
 
 import { RefusedError } from "../errors.js";
 import { nullableNumber, nullableString, num, round, short } from "../format.js";
-import { AddressSchema, ChainSchema, resolveCoin } from "./coins.js";
+import { AddressSchema, ChainSchema, resolveCoin, tradeOnSite } from "./coins.js";
 import { PURE, READ, defineTool } from "./define.js";
 
 export const DecimalAmount = z
@@ -68,6 +68,7 @@ export const quoteTrade = defineTool({
   annotations: { ...READ, idempotentHint: false },
   async run(a, { ctx, signal }) {
     const coin = await resolveCoin(ctx, a.address, a.chain, signal);
+    if (coin.kind === "external" && coin.chain !== "solana") throw tradeOnSite(ctx, coin);
     const slippage = a.slippageBps ?? ctx.config.slippageBps;
     const nativeDec = coin.chain === "solana" ? 9 : 18;
     const native = coin.kind === "evm" ? coin.token.evm.native : "SOL";

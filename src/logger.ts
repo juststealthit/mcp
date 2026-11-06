@@ -7,6 +7,15 @@
  * @module
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+import { formatWithOptions } from "node:util";
+
+/**
+ * The session a piece of work runs for. A log line written inside a tool call (or a watcher it started) carries its session, and
+ * goes out to that client only: on HTTP one server serves many clients, and one client's addresses and errors are not another's.
+ */
+export const logScope = new AsyncLocalStorage<object>();
+
 /** RFC 5424 levels, as MCP uses them. */
 export const LOG_LEVELS = ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -98,3 +107,16 @@ export class Logger {
 }
 
 export const isLogLevel = (v: unknown): v is LogLevel => typeof v === "string" && (LOG_LEVELS as readonly string[]).includes(v);
+
+/**
+ * On stdio, stdout carries the protocol, so a dependency that prints to the console's log, info or debug methods would break the
+ * session. This sends those three through the logger (to stderr) instead. Returns a function that undoes it.
+ */
+export function routeConsoleToLogger(logger: Logger): () => void {
+  const c = console as unknown as Record<"log" | "info" | "debug", (...args: unknown[]) => void>;
+  const saved = { log: c.log, info: c.info, debug: c.debug };
+  for (const m of ["log", "info", "debug"] as const) {
+    c[m] = (...args: unknown[]) => logger.log(m === "debug" ? "debug" : "info", formatWithOptions({ colors: false }, ...args));
+  }
+  return () => Object.assign(c, saved);
+}

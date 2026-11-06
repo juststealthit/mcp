@@ -11,6 +11,7 @@ import { z } from "zod";
 
 import type { StealthContext } from "./context.js";
 import { docPage } from "./docs/pages.js";
+import { CHAIN_KEYS } from "./config.js";
 import { LAUNCH_TYPES } from "./format.js";
 
 const RULES =
@@ -19,6 +20,9 @@ const RULES =
 const user = (text: string): GetPromptResult["messages"][number] => ({ role: "user", content: { type: "text", text } });
 
 export function registerPrompts(server: McpServer, ctx: StealthContext) {
+  // optional inside completable: wrapped the other way round, the completion is lost
+  const chainArg = completable(z.string().optional().describe("solana, robinhood, bnb, hyperevm, base or arc"), (value) => CHAIN_KEYS.filter((k) => k.startsWith((value ?? "").toLowerCase())));
+
   const coinArg = completable(z.string().describe("A coin's address, or its ticker"), async (value) => {
     if (value.length < 2) return [];
     const hits = await ctx.client.market.search(value.replace(/^\$/, ""), { limit: 8 }).catch(() => []);
@@ -30,15 +34,15 @@ export function registerPrompts(server: McpServer, ctx: StealthContext) {
     {
       title: "Analyze a coin",
       description: "A structured look at one coin: market, graduation, launch type and fee routing, holder risk and recent activity.",
-      argsSchema: { coin: coinArg, chain: z.string().optional().describe("solana, robinhood, bnb, hyperevm, base or arc") },
+      argsSchema: { coin: coinArg, chain: chainArg },
     },
     ({ coin, chain }) => ({
       description: `Analysis of ${coin}`,
       messages: [
         user(
           `Analyze the coin ${coin}${chain ? ` on ${chain}` : ""} on Just Stealth It.\n\n` +
-            `1. If ${coin} isn't an address, find it with search_coins first.\n` +
-            "2. Call get_coin_report. Then get_holders, get_trades (limit 25) and get_candles (interval 15m, limit 96).\n" +
+            `1. If ${coin} isn't an address, find it with search_coins first (or get_trending, for a coin that didn't launch here).\n` +
+            "2. Call get_coin_report. If it says onPlatform true, also get_holders and get_trades (limit 25); those exist only for coins launched here. Then get_candles (interval 15m, limit 96).\n" +
             "3. Write: a one-line overview; market (price, market cap, liquidity, 24 h volume, holders); stage and graduation progress; venue, pair and tax, and whether the anti-sniper window is open; " +
             "the launch type and exactly where creator fees go; the risk card with its green/amber/red bands; what the last day of trades and candles shows; and anything in warnings.\n" +
             `4. End with the token page link.\n\n${RULES}`,
@@ -125,8 +129,31 @@ export function registerPrompts(server: McpServer, ctx: StealthContext) {
       description: `Wallet ${address}`,
       messages: [
         user(
-          `Review the Solana wallet ${address} on Just Stealth It. Call get_wallet_analytics with view summary, then pnl (range 30d), rewards and portfolio. ` +
-            `Summarise PnL by period, the biggest open and closed positions, rewards earned and owed, and the trading style. Past results say nothing about future ones.\n\n${RULES}`,
+          `Review the Solana wallet ${address} on Just Stealth It. Call get_wallet_overview first, then get_wallet_analytics with view summary, pnl (range 30d) and rewards. ` +
+            "Summarise what it holds now (SOL, holdings, coins it launched and their unclaimed fees, staking, its EVM wallet), PnL by period, the biggest open and closed positions, rewards earned and owed, and the trading style. " +
+            `Say which parts couldn't be read. Past results say nothing about future ones.\n\n${RULES}`,
+        ),
+      ],
+    }),
+  );
+
+  server.registerPrompt(
+    "trending_now",
+    {
+      title: "What's trending now",
+      description: "The coins trending across chains right now, launched here and elsewhere, with the facts behind each and what sets them apart.",
+      argsSchema: { chain: chainArg },
+    },
+    ({ chain }) => ({
+      description: "Trending now",
+      messages: [
+        user(
+          `Show me what's trending on Just Stealth It right now${chain ? ` on ${chain}` : " across chains"}.\n\n` +
+            `1. Call get_trending${chain ? ` with chains ["${chain}"]` : ""} (limit 15).\n` +
+            "2. Call get_coin_report for the top 5.\n" +
+            "3. Show one table: rank, coin and chain, launched here or external (and its launchpad), market cap, liquidity, 24 h volume, change, holders, top-10 share. Then a line or two per coin on what stands out in its figures and warnings.\n" +
+            "4. Say plainly that external coins weren't launched here and nobody here checks the people behind them, and that trending measures activity, not quality.\n\n" +
+            RULES,
         ),
       ],
     }),
@@ -137,7 +164,7 @@ export function registerPrompts(server: McpServer, ctx: StealthContext) {
     {
       title: "Plan a launch",
       description: "Walks through a launch's choices (chain, venue, pair, tax, launch type, first buy) and prepares it for the user to sign.",
-      argsSchema: { idea: z.string().describe("The coin: name, ticker and what it's about"), chain: z.string().optional().describe("Where to launch, if decided") },
+      argsSchema: { idea: z.string().describe("The coin: name, ticker and what it's about"), chain: chainArg },
     },
     ({ idea, chain }) => ({
       description: "Launch plan",

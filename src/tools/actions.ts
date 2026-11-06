@@ -5,7 +5,7 @@
  * @module
  */
 import { StealthFeeTooHighError } from "@juststealthit/sdk";
-import type { EvmDirectLaunchType, EvmTaxBps } from "@juststealthit/sdk/evm";
+import { EVM_LAUNCH_TYPES, type EvmDirectLaunchType, type EvmTaxBps } from "@juststealthit/sdk/evm";
 import type { MixSlice, SolanaLaunchInput, SolanaVenue } from "@juststealthit/sdk/solana";
 import { formatUnits, isEvmAddress, isSolanaAddress, parseUnits } from "@juststealthit/sdk/utils";
 import type { Address } from "viem";
@@ -13,13 +13,13 @@ import { z } from "zod";
 
 import { prepareEvmLaunch, prepareEvmTrade, evmTokenBalance, type UnsignedEvmTx } from "../actions/evm.js";
 import type { ActionKind, EncodedSolanaTx, PreparedAction } from "../actions/prepared.js";
-import { lamportsToSolText } from "../actions/signing.js";
+import { canConfirm, lamportsToSolText } from "../actions/signing.js";
 import { assertPaidBy, prepareSolanaLaunch, prepareSolanaTrade, solanaTokenBalance } from "../actions/solana.js";
 import { isEvmChain, type EvmChain } from "../config.js";
 import type { StealthContext } from "../context.js";
 import { RefusedError } from "../errors.js";
 import { LAUNCH_TYPES, iso, nullableString, short } from "../format.js";
-import { AddressSchema, ChainSchema, resolveCoin, type ResolvedCoin } from "./coins.js";
+import { AddressSchema, ChainSchema, resolveCoin, tradeOnSite, type ResolvedCoin } from "./coins.js";
 import { PREPARE, READ, SIGN, defineTool, type ToolEnv } from "./define.js";
 import { DecimalAmount } from "./maths.js";
 import { PoolIdSchema, findPool } from "./staking.js";
@@ -85,13 +85,14 @@ async function evmFrom(ctx: StealthContext, wallet?: string): Promise<Address> {
   return from as Address;
 }
 
-function routeOf(coin: ResolvedCoin) {
+function routeOf(ctx: StealthContext, coin: ResolvedCoin) {
   if (coin.kind === "sol") {
     const via = coin.token.sol.swapVia;
     if (via === null) throw new RefusedError("not_tradable", coin.token.sol.tradeMessage ?? `${coin.token.symbol} can't be traded here right now.`);
     return { route: via, decimals: coin.token.decimals ?? 6, symbol: coin.token.symbol, name: coin.token.name, onPlatform: true };
   }
   if (coin.kind === "external") {
+    if (coin.chain !== "solana") throw tradeOnSite(ctx, coin);
     if (coin.coin.decimals === null) throw new RefusedError("unknown_decimals", "This token's decimals aren't known, so an amount can't be converted safely.");
     return { route: "jupiter" as const, decimals: coin.coin.decimals, symbol: coin.coin.symbol, name: coin.coin.name, onPlatform: coin.coin.onPlatform };
   }
@@ -131,7 +132,7 @@ async function prepareTrade(side: "buy" | "sell", a: { address: string; chain?: 
         transactions: evmTxs(t.transactions),
         preparedId: null,
         expiresAt: iso(t.deadline * 1000),
-        finishOnSite: ctx.links.coin(coin.address),
+        finishOnSite: ctx.links.coin(coin.address, coin.chain),
         nextSteps: evmNextSteps(from),
         warnings,
         disclaimer: DISCLAIMER,
@@ -140,8 +141,8 @@ async function prepareTrade(side: "buy" | "sell", a: { address: string; chain?: 
     };
   }
 
+  const r = routeOf(ctx, coin);
   const owner = await solanaOwner(ctx, a.wallet);
-  const r = routeOf(coin);
   let raw: bigint;
   if (side === "buy") raw = parseUnits(a.amount!, 9);
   else if (a.percent !== undefined) {
@@ -157,7 +158,7 @@ async function prepareTrade(side: "buy" | "sell", a: { address: string; chain?: 
   const where = t.route === "app" ? (t.venue === "curve" ? "its bonding curve" : "its pool") : `Jupiter (${t.venue})`;
   const summary = `${side === "buy" ? "Buy" : "Sell"} ${t.symbol} on Solana through ${where}: ${short(formatUnits(BigInt(t.quote.amountIn), inDec))} ${inU} for about ${short(formatUnits(BigInt(t.quote.amountOut), outDec))} ${outU} (at least ${short(formatUnits(BigInt(t.quote.minAmountOut), outDec))}, slippage ${slippage / 100}%). Fee right now ${t.quote.feeBps === null ? "set by the route" : pct(t.quote.feeBps)}. Wallet ${owner}.`;
   const spend = side === "buy" ? BigInt(t.quote.amountIn) : 0n;
-  const held = stash(ctx, { kind: side as ActionKind, chain: "solana", owner, summary, spendLamports: spend, feeBps: t.quote.feeBps, maxFeeBps: a.maxFeeBps, transactions: t.transactions, bundle: false, stakingActionId: null, mint: coin.address });
+  const held = stash(ctx, { kind: side as ActionKind, chain: "solana", owner, summary, spendLamports: spend, feeBps: t.quote.feeBps, maxFeeBps: a.maxFeeBps, transactions: t.transactions, bundle: false, stakingActionId: null, mint: coin.address, page: ctx.links.coin(coin.address, "solana", t.onPlatform) });
   return {
     data: {
       action: side,
@@ -168,7 +169,7 @@ async function prepareTrade(side: "buy" | "sell", a: { address: string; chain?: 
       format: "solana-base64" as const,
       transactions: solTxs(t.transactions),
       ...held,
-      finishOnSite: ctx.links.coin(coin.address),
+      finishOnSite: ctx.links.coin(coin.address, "solana", t.onPlatform),
       nextSteps: solNextSteps(ctx, owner, held.preparedId),
       warnings,
       disclaimer: DISCLAIMER,
@@ -229,7 +230,7 @@ export const prepareStake = defineTool({
     assertPaidBy(txs, owner);
     const deposit = BigInt(p.depositLamports);
     const summary = `Stake ${a.amount} ${pool.symbol} in the ${pool.name} pool from ${owner}, receiving ${a.amount} ${pool.receiptSymbol} as the receipt.${deposit > 0n ? ` A first stake also deposits ${lamportsToSolText(deposit)} SOL into your escrow, returned when you've unstaked everything.` : ""} Unstaking takes ${pool.cooldownSec / 3_600} h.`;
-    const held = stash(ctx, { kind: "stake", chain: "solana", owner, summary, spendLamports: deposit, feeBps: null, maxFeeBps: null, transactions: txs, bundle: false, stakingActionId: p.actionId, mint: pool.mint });
+    const held = stash(ctx, { kind: "stake", chain: "solana", owner, summary, spendLamports: deposit, feeBps: null, maxFeeBps: null, transactions: txs, bundle: false, stakingActionId: p.actionId, mint: pool.mint, page: ctx.links.home() });
     return {
       data: {
         action: "stake",
@@ -281,7 +282,7 @@ export const prepareUnstake = defineTool({
     assertPaidBy(txs, owner);
     const amount = formatUnits(raw, pool.decimals);
     const summary = `Unstake ${amount} ${pool.symbol} from the ${pool.name} pool, handing back ${amount} ${pool.receiptSymbol}. It comes back to ${owner} with its share of rewards about ${(p.unlockInSec / 3_600).toFixed(1)} h after it confirms.`;
-    const held = stash(ctx, { kind: "unstake", chain: "solana", owner, summary, spendLamports: 0n, feeBps: null, maxFeeBps: null, transactions: txs, bundle: false, stakingActionId: p.actionId, mint: pool.mint });
+    const held = stash(ctx, { kind: "unstake", chain: "solana", owner, summary, spendLamports: 0n, feeBps: null, maxFeeBps: null, transactions: txs, bundle: false, stakingActionId: p.actionId, mint: pool.mint, page: ctx.links.home() });
     return {
       data: {
         action: "unstake",
@@ -303,7 +304,8 @@ export const prepareUnstake = defineTool({
 });
 
 const SOLANA_TYPES = ["creator", "social", "team", "wallet", "marketing", "holders", "diamond", "buyback", "feed", "liquidity", "mix"] as const;
-const EVM_TYPES = ["creator", "team", "marketing", "holders", "buyback"] as const;
+/** What a direct EVM launch can pick: the contracts' types without `pot`, whose fee plan only the site stores. */
+export const EVM_TYPES = EVM_LAUNCH_TYPES.filter((t): t is EvmDirectLaunchType => t !== "pot");
 const Socials = z.object({
   twitter: z.string().max(256).optional(),
   telegram: z.string().max(256).optional(),
@@ -337,7 +339,7 @@ const LaunchInput = {
     })
     .optional()
     .describe("Social type: the account whose vault receives the fees. The launcher gets none"),
-  taxBps: z.union([z.literal(125), z.literal(225), z.literal(325), z.literal(425), z.literal(575)]).optional().describe("EVM only. Default 125"),
+  taxBps: z.union([z.literal(125), z.literal(225), z.literal(325), z.literal(425), z.literal(575)]).optional().describe("EVM only: 125, 225, 325, 425 or 575. Default 125"),
   maxWalletBps: z.number().int().min(0).max(500).optional().describe("EVM only: 50 to 500, for limitsWindowSec"),
   maxBuyBps: z.number().int().min(0).max(500).optional().describe("EVM only: 10 to 500, for limitsWindowSec"),
   limitsWindowSec: z.number().int().min(0).max(3_600).optional(),
@@ -387,7 +389,7 @@ export const prepareLaunch = defineTool({
     const { prepared, transactions } = await prepareSolanaLaunch(ctx, owner, input);
     const venueName = prepared.venue === "pump" ? "Pump.fun" : prepared.venue === "raydium" ? "Raydium LaunchLab" : "Meteora";
     const summary = `Launch ${a.name} ($${input.symbol}) on Solana through ${venueName}${prepared.taxTier ? `, tier ${prepared.taxTier}` : ""}, launch type ${typeInfo.label}${firstBuy > 0n ? `, with a first buy of ${a.firstBuy} SOL` : ", with no first buy"}. Paid by ${owner}. Locked once it lands: venue, pair, tier and launch type. It can't be undone or refunded.`;
-    const held = stash(ctx, { kind: "launch", chain: "solana", owner, summary, spendLamports: firstBuy, feeBps: null, maxFeeBps: null, transactions, bundle: prepared.bundle === true, stakingActionId: null, mint: prepared.mint });
+    const held = stash(ctx, { kind: "launch", chain: "solana", owner, summary, spendLamports: firstBuy, feeBps: null, maxFeeBps: null, transactions, bundle: prepared.bundle === true, stakingActionId: null, mint: prepared.mint, page: ctx.links.coin(prepared.mint) });
     return {
       data: {
         action: "launch",
@@ -463,7 +465,7 @@ async function evmLaunch(ctx: StealthContext, chain: EvmChain, a: z.infer<z.ZodO
         launchType: a.launchType,
         launchTypeSummary: typeInfo.summary,
         taxBps: a.taxBps ?? 125,
-        pageAfterLaunch: ctx.links.coin(prepared.predictedToken),
+        pageAfterLaunch: ctx.links.coin(prepared.predictedToken, chain),
       },
       format: "evm-unsigned" as const,
       transactions: evmTxs(transactions),
@@ -502,7 +504,7 @@ export const signAndSend = defineTool({
     if (!action) throw new RefusedError("unknown_or_expired", "No prepared action with that id: it was used, or it expired (they last about a minute). Prepare it again.");
     signer.check(action);
     const answer = await signer.confirm(server.server, action, signal);
-    const base = { action: action.kind, signatures: [], explorer: [], spentSol: "0", dailyCapSol: signer.caps.maxSolPerDay, page: action.mint ? ctx.links.coin(action.mint) : null };
+    const base = { action: action.kind, signatures: [], explorer: [], spentSol: "0", dailyCapSol: signer.caps.maxSolPerDay, page: action.page };
     if (answer === "declined" || answer === "cancelled") {
       return { data: { ...base, status: answer, spentLast24hSol: lamportsToSolText(await signer.spentLastDay()) }, summary: `Not sent: the confirmation was ${answer}.` };
     }
@@ -547,7 +549,7 @@ export const getSigningStatus = defineTool({
         wallet: s ? { name: s.walletName, address: s.address } : null,
         caps: s ? s.caps : { maxSolPerTx: ctx.config.mcp.maxSolPerTx, maxSolPerDay: ctx.config.mcp.maxSolPerDay },
         spentLast24hSol: s ? lamportsToSolText(await s.spentLastDay()) : null,
-        clientCanConfirm: !!server.server.getClientCapabilities()?.elicitation,
+        clientCanConfirm: canConfirm(server.server),
         requireConfirmation: s?.requireElicitation ?? false,
         keystoreWallets: wallets.map((w) => ({ name: w.name, kind: w.kind, address: w.address })),
       },

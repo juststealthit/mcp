@@ -57,25 +57,25 @@ describe("key forms", () => {
   const kp = Keypair.generate();
   const address = kp.publicKey.toBase58();
 
-  it("accepts a 64-byte Solana secret key", () => {
-    expect(solanaKeypairFrom(kp.secretKey, address).publicKey.toBase58()).toBe(address);
+  it("accepts a 64-byte Solana secret key", async () => {
+    expect((await solanaKeypairFrom(kp.secretKey, address)).publicKey.toBase58()).toBe(address);
   });
-  it("accepts a 32-byte seed", () => {
-    expect(solanaKeypairFrom(kp.secretKey.slice(0, 32), address).publicKey.toBase58()).toBe(address);
+  it("accepts a 32-byte seed", async () => {
+    expect((await solanaKeypairFrom(kp.secretKey.slice(0, 32), address)).publicKey.toBase58()).toBe(address);
   });
-  it("accepts the JSON byte array Solana's tools write", () => {
+  it("accepts the JSON byte array Solana's tools write", async () => {
     const text = new TextEncoder().encode(JSON.stringify([...kp.secretKey]));
-    expect(solanaKeypairFrom(text, address).publicKey.toBase58()).toBe(address);
+    expect((await solanaKeypairFrom(text, address)).publicKey.toBase58()).toBe(address);
   });
-  it("refuses a key that doesn't match the address", () => {
-    expect(() => solanaKeypairFrom(Keypair.generate().secretKey, address)).toThrow(/doesn't match/);
+  it("refuses a key that doesn't match the address", async () => {
+    await expect(solanaKeypairFrom(Keypair.generate().secretKey, address)).rejects.toThrow(/doesn't match/);
   });
-  it("reads an EVM private key, raw or as hex text, and checks its address", () => {
+  it("reads an EVM private key, raw or as hex text, and checks its address", async () => {
     const pk = generatePrivateKey();
     const addr = privateKeyToAccount(pk).address;
-    expect(evmAccountFrom(Buffer.from(pk.slice(2), "hex"), addr.toLowerCase()).address).toBe(addr);
-    expect(evmAccountFrom(new TextEncoder().encode(pk), addr).address).toBe(addr);
-    expect(() => evmAccountFrom(Buffer.from(pk.slice(2), "hex"), "0x0000000000000000000000000000000000000001")).toThrow(/doesn't match/);
+    expect((await evmAccountFrom(Buffer.from(pk.slice(2), "hex"), addr.toLowerCase())).address).toBe(addr);
+    expect((await evmAccountFrom(new TextEncoder().encode(pk), addr)).address).toBe(addr);
+    await expect(evmAccountFrom(Buffer.from(pk.slice(2), "hex"), "0x0000000000000000000000000000000000000001")).rejects.toThrow(/doesn't match/);
   });
 });
 
@@ -110,7 +110,7 @@ describe("readKeystore", () => {
     const t = await tempDir();
     cleanup = t.cleanup;
     await writeFile(path.join(t.dir, "keystore.json"), JSON.stringify({ version: 2, wallets: [] }));
-    await expect(readKeystore(t.dir)).rejects.toMatchObject({ code: "invalid" });
+    await expect(readKeystore(t.dir)).rejects.toMatchObject({ code: "bad_keystore" });
   });
 
   it("rejects weak scrypt parameters", async () => {
@@ -119,7 +119,7 @@ describe("readKeystore", () => {
     const w = await testWallet();
     const weak: KeystoreWallet = { ...w.wallet, crypto: { ...w.wallet.crypto, kdfparams: { ...w.wallet.crypto.kdfparams, n: 1024 } } };
     await writeKeystore(t.dir, [weak]);
-    await expect(readKeystore(t.dir)).rejects.toMatchObject({ code: "invalid" });
+    await expect(readKeystore(t.dir)).rejects.toMatchObject({ code: "bad_keystore" });
   });
 
   it("rejects a wallet whose address isn't of its kind", async () => {
@@ -127,7 +127,7 @@ describe("readKeystore", () => {
     cleanup = t.cleanup;
     const w = await testWallet();
     await writeKeystore(t.dir, [{ ...w.wallet, address: "0x0000000000000000000000000000000000000001" }]);
-    await expect(readKeystore(t.dir)).rejects.toThrow(/isn't a solana address/);
+    await expect(readKeystore(t.dir)).rejects.toMatchObject({ code: "bad_keystore" });
   });
 
   it("picks by name, and refuses the wrong kind", async () => {

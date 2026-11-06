@@ -41,6 +41,9 @@ export interface StealthContextOptions {
   evmPollMs?: number;
   /** How often a subscribed staking pool is re-read, in ms. Default 60 s. */
   stakingPollMs?: number;
+  /** How often a subscribed Feed or Trending list is re-read, in ms. Default 15 s and 60 s. */
+  feedPollMs?: number;
+  trendingPollMs?: number;
   /** The local signer, when signing is on. */
   signer?: LocalSigner | null;
   /** Why signing is off, for the status tool. */
@@ -59,6 +62,8 @@ export class StealthContext {
   readonly signingOffReason: string | undefined;
   readonly evmPollMs: number;
   readonly stakingPollMs: number;
+  readonly feedPollMs: number;
+  readonly trendingPollMs: number;
   private readonly apiOptions: ApiOptions;
   private readonly rpcUrls: Partial<Record<EvmChain, string>>;
   private readonly evmClients = new Map<EvmChain, StealthEvm>();
@@ -73,6 +78,8 @@ export class StealthContext {
     this.signingOffReason = opts.signingOffReason;
     this.evmPollMs = opts.evmPollMs ?? 15_000;
     this.stakingPollMs = opts.stakingPollMs ?? 60_000;
+    this.feedPollMs = opts.feedPollMs ?? 15_000;
+    this.trendingPollMs = opts.trendingPollMs ?? 60_000;
     this.rpcUrls = opts.rpcUrls ?? {};
     this.links = new Links(opts.config.apiUrl, opts.siteUrl);
     const headers: Record<string, string> = { "user-agent": `${SERVER_NAME}/${VERSION}` };
@@ -124,11 +131,15 @@ export class StealthContext {
     return this.keystoreWallets;
   }
 
-  /** The wallet a prepared action is for: the one given, else the signer's, else the keystore's first of that kind. */
+  /**
+   * The wallet a prepared action is for: the one given, else the signer's, else config.json's default wallet when it is of that kind
+   * (the CLI's `wallet` setting), else the keystore's first of that kind.
+   */
   async defaultAddress(kind: "solana" | "evm", given?: string): Promise<string> {
     if (given) return given;
     if (kind === "solana" && this.signer) return this.signer.address;
-    const w = (await this.wallets()).find((x) => x.kind === kind);
+    const all = await this.wallets();
+    const w = all.find((x) => x.kind === kind && x.name === this.config.wallet) ?? all.find((x) => x.kind === kind);
     if (w) return w.address;
     throw new RefusedError("owner_required", `Say which ${kind === "solana" ? "Solana" : "EVM"} wallet this is for: pass its address, or add one to the shared keystore.`);
   }

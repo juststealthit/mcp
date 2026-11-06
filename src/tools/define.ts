@@ -12,6 +12,7 @@ import { z } from "zod";
 import type { StealthContext } from "../context.js";
 import { describeError, toolError } from "../errors.js";
 import { jsonSafe } from "../format.js";
+import { logScope } from "../logger.js";
 
 export type Extra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
@@ -86,6 +87,8 @@ export function registerTool(server: McpServer, ctx: StealthContext, spec: AnyTo
       return toolError(error);
     }
   };
+  // everything the call logs, the API lines included, goes to the session that made it
+  const scoped = (args: unknown, extra: Extra) => logScope.run(server, () => handler(args, extra));
   server.registerTool(
     spec.name,
     {
@@ -95,6 +98,6 @@ export function registerTool(server: McpServer, ctx: StealthContext, spec: AnyTo
       outputSchema: spec.output,
       annotations: { title: spec.title, ...spec.annotations },
     },
-    handler as never,
+    scoped as never,
   );
 }

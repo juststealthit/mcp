@@ -8,7 +8,7 @@
  * @module
  */
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { z } from "zod";
@@ -48,7 +48,13 @@ export class SpendLedger {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
-    const parsed = FileSchema.safeParse(JSON.parse(raw));
+    let json: unknown;
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      json = null;
+    }
+    const parsed = FileSchema.safeParse(json);
     // a damaged ledger must not reset the cap to zero: refuse to sign until it's fixed
     if (!parsed.success) throw new Error(`The spend ledger at ${this.file} is damaged. Fix or remove it to sign again.`);
     return parsed.data.entries;
@@ -61,8 +67,13 @@ export class SpendLedger {
     await rename(tmp, this.file);
   }
 
+  /**
+   * Runs `fn` alone: queued behind this process's other writes, and holding a lock file against other processes, since two clients
+   * can each start their own server over the same config directory. Without it, both could read the same total and both reserve.
+   */
   private locked<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(fn, fn);
+    const guarded = () => withFileLock(`${this.file}.lock`, fn, this.now);
+    const run = this.queue.then(guarded, guarded);
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -105,6 +116,46 @@ export class SpendLedger {
       e.signature = signature;
       await this.write(entries);
     });
+  }
+}
+
+/** A lock older than this is left over from a process that died holding it. */
+export const LOCK_STALE_MS = 30_000;
+const LOCK_WAIT_MS = 10_000;
+
+/**
+ * Holds `lockFile` (created exclusively) while `fn` runs. Waits for another holder up to 10 s, and takes over a lock older than
+ * {@link LOCK_STALE_MS}. Gives up with an error rather than run unguarded.
+ */
+export async function withFileLock<T>(lockFile: string, fn: () => Promise<T>, now: () => number = Date.now): Promise<T> {
+  await mkdir(path.dirname(lockFile), { recursive: true, mode: 0o700 });
+  const started = Date.now();
+  let wait = 10;
+  for (;;) {
+    try {
+      const handle = await open(lockFile, "wx", 0o600);
+      try {
+        await handle.writeFile(JSON.stringify({ pid: process.pid, at: now() }));
+      } finally {
+        await handle.close();
+      }
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const held = await stat(lockFile).catch(() => null);
+      if (held && Date.now() - held.mtimeMs > LOCK_STALE_MS) {
+        await unlink(lockFile).catch(() => undefined);
+        continue;
+      }
+      if (Date.now() - started > LOCK_WAIT_MS) throw new Error(`The spend ledger is locked by another process (${lockFile}). If none is running, remove the lock file.`);
+      await new Promise((r) => setTimeout(r, wait));
+      wait = Math.min(wait * 2, 200);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await unlink(lockFile).catch(() => undefined);
   }
 }
 

@@ -1,7 +1,7 @@
 {
   "name": "@juststealthit/mcp",
-  "version": "0.1.0",
-  "description": "The official Model Context Protocol server for Just Stealth It ($STEALTH): read coins, burns, staking, wallets and perps markets on every chain, and prepare launches, trades and stakes for your own wallet to sign.",
+  "version": "0.2.0",
+  "description": "The official Model Context Protocol server for Just Stealth It ($STEALTH): read coins (launched here or trending anywhere), burns, staking, wallets and perps markets on every chain, and prepare launches, trades and stakes for your own wallet to sign.",
   "license": "MIT",
   "author": "Stealth",
   "type": "module",
@@ -59,7 +59,7 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@juststealthit/sdk": "^0.2.0",
+    "@juststealthit/sdk": "^0.3.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@solana/web3.js": "^1.98.0",
     "viem": "^2.30.0",

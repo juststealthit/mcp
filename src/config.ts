@@ -13,14 +13,19 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import { DEFAULT_API_URL } from "@juststealthit/sdk";
+import { stealthConfigDir } from "@juststealthit/sdk/keystore";
+import { CHAINS, LIVE_CHAIN_KEYS, LIVE_EVM_CHAIN_KEYS, type ChainKey as AnyChainKey, type LiveChainKey, type LiveEvmChainKey } from "@juststealthit/sdk/utils";
 import { z } from "zod";
 
-/** Chains the platform runs coins on today. */
-export const CHAIN_KEYS = ["solana", "robinhood", "bnb", "hyperevm", "base", "arc"] as const;
-export type ChainKey = (typeof CHAIN_KEYS)[number];
-export const EVM_CHAIN_KEYS = ["robinhood", "bnb", "hyperevm", "base", "arc"] as const;
-export type EvmChain = (typeof EVM_CHAIN_KEYS)[number];
+/** Chains the platform runs coins on today, from the SDK's registry: Solana and the live EVM chains. */
+export const CHAIN_KEYS = LIVE_CHAIN_KEYS as readonly LiveChainKey[] as readonly [LiveChainKey, ...LiveChainKey[]];
+export type ChainKey = LiveChainKey;
+export const EVM_CHAIN_KEYS = LIVE_EVM_CHAIN_KEYS as readonly LiveEvmChainKey[] as readonly [LiveEvmChainKey, ...LiveEvmChainKey[]];
+export type EvmChain = LiveEvmChainKey;
 export const isEvmChain = (c: string): c is EvmChain => (EVM_CHAIN_KEYS as readonly string[]).includes(c);
+/** Every chain the registry knows, coming-soon ones included: what a tool accepts, so it can say a chain isn't open yet. */
+export const ALL_CHAIN_KEYS = Object.keys(CHAINS) as AnyChainKey[] as [AnyChainKey, ...AnyChainKey[]];
+export type { AnyChainKey };
 
 /** Caps that apply when local signing is on and `config.json` doesn't set its own. */
 export const DEFAULT_SIGNING_CAPS = { maxSolPerTx: 0.25, maxSolPerDay: 1 } as const;
@@ -41,6 +46,8 @@ export const ConfigFileSchema = z.looseObject({
   defaultChain: z.enum(CHAIN_KEYS).optional(),
   slippageBps: z.number().int().min(10).max(5_000).optional(),
   theme: z.string().optional(),
+  /** The default wallet's name, as the CLI sets it. */
+  wallet: z.string().min(1).max(64).optional(),
   mcp: McpSettingsSchema.optional(),
 });
 export type ConfigFile = z.infer<typeof ConfigFileSchema>;
@@ -52,6 +59,8 @@ export interface ResolvedConfig {
   defaultChain: ChainKey;
   slippageBps: number;
   theme: string | undefined;
+  /** The default keystore wallet's name, shared with the CLI. */
+  wallet: string | undefined;
   mcp: { allowSigning: boolean; maxSolPerTx: number; maxSolPerDay: number };
 }
 
@@ -65,16 +74,12 @@ export interface LoadedConfig {
   config: ResolvedConfig;
 }
 
-/** The config directory for this platform and environment. */
+/**
+ * The config directory for this platform and environment, by the SDK's rule that the CLI follows too: `%APPDATA%\stealth` on Windows,
+ * else an absolute `$XDG_CONFIG_HOME/stealth`, else `~/.config/stealth`. A 0.1 CLI folder that already holds the files is kept.
+ */
 export function configDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, home: string = homedir()): string {
-  if (platform === "win32") {
-    const appData = env.APPDATA && path.win32.isAbsolute(env.APPDATA) ? env.APPDATA : path.win32.join(home, "AppData", "Roaming");
-    return path.win32.join(appData, "stealth");
-  }
-  const xdg = env.XDG_CONFIG_HOME;
-  // the XDG spec says a relative value is invalid and must be ignored
-  const base = xdg && path.posix.isAbsolute(xdg) ? xdg : path.posix.join(home, ".config");
-  return path.posix.join(base, "stealth");
+  return stealthConfigDir({ env, platform, home });
 }
 
 export function resolveConfig(file: ConfigFile = {}): ResolvedConfig {
@@ -84,6 +89,7 @@ export function resolveConfig(file: ConfigFile = {}): ResolvedConfig {
     defaultChain: file.defaultChain ?? "solana",
     slippageBps: file.slippageBps ?? DEFAULT_SLIPPAGE_BPS,
     theme: file.theme,
+    wallet: file.wallet,
     mcp: {
       allowSigning: file.mcp?.allowSigning ?? false,
       maxSolPerTx: file.mcp?.maxSolPerTx ?? DEFAULT_SIGNING_CAPS.maxSolPerTx,

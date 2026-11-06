@@ -31,8 +31,28 @@ describe("market tools", () => {
     expect(q.get("stages")).toBe("migrated,new");
     expect(q.get("chains")).toBe("solana,base");
     expect(q.get("sort")).toBe("volume");
-    expect(r).toMatchObject({ nextCursor: "c2", truncated: 1 });
+    expect(r).toMatchObject({ truncated: 1 });
     expect(r.coins).toHaveLength(1);
+  });
+
+  it("get_board pages through every coin when limit is under the API's page size", async () => {
+    const page1 = [1, 2, 3, 4, 5].map((i) => marketRow({ address: `${MINT.slice(0, -1)}${i}`, symbol: `C${i}` }));
+    const page2 = [6, 7].map((i) => marketRow({ address: `${MINT.slice(0, -1)}${i}`, symbol: `C${i}` }));
+    h = await harness({
+      routes: { "GET /market/tokens": (c: { url: URL }) => (c.url.searchParams.get("cursor") === "next" ? { items: page2, nextCursor: null, total: 7 } : { items: page1, nextCursor: "next", total: 7 }) },
+    });
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let i = 0; i < 10; i++) {
+      const r = await call<{ coins: { symbol: string }[]; nextCursor: string | null }>(h, "get_board", { limit: 2, ...(cursor ? { cursor } : {}) });
+      seen.push(...r.coins.map((c) => c.symbol));
+      if (!r.nextCursor) break;
+      cursor = r.nextCursor;
+    }
+    expect(seen).toEqual(["C1", "C2", "C3", "C4", "C5", "C6", "C7"]);
+    // an API cursor from an older client still works as it is
+    const old = await call<{ coins: { symbol: string }[] }>(h, "get_board", { limit: 5, cursor: "next" });
+    expect(old.coins.map((c) => c.symbol)).toEqual(["C6", "C7"]);
   });
 
   it("get_coin_report puts market, launch type, fee routing and banded risk together", async () => {
@@ -189,9 +209,11 @@ describe("platform tools", () => {
         "GET /sol/burn/next": { everyHours: 6, lastAt: 1, nextAt: 2, progress: 0.5, now: 1 },
         "GET /sol/burn/events": { items: [{ sig: "s1", seq: 0, slot: 1, time: 1_700_000_000_000, amount: 1000, amountRaw: "1", wallet: "w", authority: "a", solSpent: 0.1, solscan: "https://solscan.io/tx/s1" }], nextCursor: null, updatedAt: 1 },
         "GET /sol/burn/coins": { range: "24h", items: [{ mint: MINT, symbol: "TEST", name: "T", logoUrl: null, status: "new", feesSol: 0.2, feesUsd: 30, sharePct: 50, fees24hSol: 0.2, allTimeFeesSol: 1, sentSol: 0, accruingSol: 0, rank: 1 }], count: 1, totalFeesSol: 0.4, totalFeesUsd: 60, updatedAt: 1 },
+        "GET /sol/burn/bot": { mode: "buy_burn", everyMin: 60, reserveSol: 0.1, updatedAt: 1, status: "live", wallet: "w", solscan: null, balanceSol: 2, spendableSol: 1.9, nextBuySol: 0.05, runwayDays: 30, lastRunAt: 1_700_000_000_000, nextAt: 1_700_003_600_000, totals: { buys: 12, solSpent: 0.6, tokensBurned: 1e6 }, recent: [] },
       },
     });
     const r = await call<Record<string, any>>(h, "get_stealth_burns", { recent: 1, topCoins: 1 });
+    expect(r.buybackBot).toMatchObject({ status: "live", mode: "buy_burn", everyMinutes: 60, nextBuySol: 0.05, totals: { buys: 12 } });
     expect(r.supply).toMatchObject({ burnedPct: 5, current: 9.5e8 });
     expect(r.nextBurn).toMatchObject({ everyHours: 6, progress: 0.5 });
     expect(r.recentBurns[0]).toMatchObject({ tx: "s1", amount: 1000 });

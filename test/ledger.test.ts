@@ -1,9 +1,9 @@
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { DAY_MS, DailyCapError, SpendLedger } from "../src/actions/ledger.js";
+import { DAY_MS, DailyCapError, LOCK_STALE_MS, SpendLedger } from "../src/actions/ledger.js";
 import { PreparedStore } from "../src/actions/prepared.js";
 import { tempDir } from "./helpers.js";
 
@@ -22,6 +22,36 @@ describe("SpendLedger", () => {
     await expect(l.reserve(500n, "buy", 1_000n)).rejects.toSatisfy((e: unknown) => e instanceof DailyCapError && e.leftLamports === 400n);
     await l.reserve(400n, "buy", 1_000n);
     expect(await l.spentLastDay()).toBe(1_000n);
+  });
+
+  it("holds the cap across two servers sharing one config dir", async () => {
+    const t = await tempDir();
+    cleanup = t.cleanup;
+    // two ledgers over one file stand for two server processes: each has its own in-process queue
+    const a = SpendLedger.in(t.dir);
+    const b = SpendLedger.in(t.dir);
+    const results = await Promise.allSettled([a.reserve(600n, "buy", 1_000n), b.reserve(600n, "buy", 1_000n), a.reserve(600n, "buy", 1_000n), b.reserve(600n, "buy", 1_000n)]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(await a.spentLastDay()).toBe(600n);
+    await expect(stat(path.join(t.dir, "mcp-spend.json.lock"))).rejects.toThrow();
+  });
+
+  it("takes over a lock left behind by a process that died", async () => {
+    const t = await tempDir();
+    cleanup = t.cleanup;
+    const lock = path.join(t.dir, "mcp-spend.json.lock");
+    await writeFile(lock, "{}");
+    const old = new Date(Date.now() - LOCK_STALE_MS - 5_000);
+    await utimes(lock, old, old);
+    await SpendLedger.in(t.dir).reserve(1n, "buy", 10n);
+    expect(await SpendLedger.in(t.dir).spentLastDay()).toBe(1n);
+  });
+
+  it("refuses a damaged ledger instead of starting from zero", async () => {
+    const t = await tempDir();
+    cleanup = t.cleanup;
+    await writeFile(path.join(t.dir, "mcp-spend.json"), "{ not json");
+    await expect(SpendLedger.in(t.dir).reserve(1n, "buy", 10n)).rejects.toThrow(/damaged/);
   });
 
   it("releases a spend that failed before landing", async () => {
@@ -66,7 +96,7 @@ describe("SpendLedger", () => {
 });
 
 describe("PreparedStore", () => {
-  const action = { kind: "buy" as const, chain: "solana" as const, owner: "o", summary: "s", spendLamports: 1n, feeBps: null, maxFeeBps: null, transactions: [], bundle: false, stakingActionId: null, mint: null };
+  const action = { kind: "buy" as const, chain: "solana" as const, owner: "o", summary: "s", spendLamports: 1n, feeBps: null, maxFeeBps: null, transactions: [], bundle: false, stakingActionId: null, mint: null, page: null };
 
   it("hands an action out once", () => {
     const s = new PreparedStore();

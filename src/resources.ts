@@ -1,6 +1,7 @@
 /**
  * Resources: `stealth://coin/{address}` (the coin report), `stealth://docs/{page}` (bundled doc summaries), `stealth://staking/{pool}`
- * (a staking pool) and `stealth://chains`. Coins and pools can be subscribed to; see `subscriptions.ts`.
+ * (a staking pool), `stealth://feed` and `stealth://trending` (live lists) and `stealth://chains`. Coins, pools, the Feed and Trending
+ * can be subscribed to; see `subscriptions.ts`.
  *
  * @module
  */
@@ -12,8 +13,11 @@ import type { StealthContext } from "./context.js";
 import { DOC_PAGES, DOC_SLUGS, docPage } from "./docs/pages.js";
 import { NotFoundError, toMcpError } from "./errors.js";
 import { jsonSafe } from "./format.js";
+import { logScope } from "./logger.js";
 import { Subscriptions, parseStealthUri } from "./subscriptions.js";
 import { coinReport, resolveCoin } from "./tools/coins.js";
+import { trendingRow } from "./tools/market.js";
+import { feedItem } from "./tools/platform.js";
 import { findPool, poolView } from "./tools/staking.js";
 
 const json = (uri: string, value: unknown) => ({ contents: [{ uri, mimeType: "application/json", text: JSON.stringify(jsonSafe(value), null, 1) }] });
@@ -92,13 +96,50 @@ export function registerResources(server: McpServer, ctx: StealthContext): Subsc
     async (uri) => json(uri.href, { chains: listChains() }),
   );
 
+  server.registerResource(
+    "feed",
+    "stealth://feed",
+    {
+      title: "The Feed, live",
+      description: "The newest 20 Feed items: launches, graduations, burns, dev buys, claims and posts across every chain. Subscribe to hear when something new lands.",
+      mimeType: "application/json",
+    },
+    async (uri) => {
+      try {
+        const page = await ctx.client.feed.list({ filter: "all", limit: 20 });
+        return json(uri.href, { items: page.items.map(feedItem), next: page.next });
+      } catch (error) {
+        throw toMcpError(error);
+      }
+    },
+  );
+
+  server.registerResource(
+    "trending",
+    "stealth://trending",
+    {
+      title: "Trending, live",
+      description: "What's trending across chains right now: coins launched here and external coins trending on their own chains. Subscribe to hear when the top 20 change.",
+      mimeType: "application/json",
+    },
+    async (uri) => {
+      try {
+        const t = await ctx.client.market.trending({});
+        return json(uri.href, { coins: t.coins.slice(0, 50).map((c, i) => trendingRow(ctx, c, i)), externalIncluded: t.outside });
+      } catch (error) {
+        throw toMcpError(error);
+      }
+    },
+  );
+
   const subs = new Subscriptions(ctx, (uri) => server.server.sendResourceUpdated({ uri }));
   server.server.registerCapabilities({ resources: { subscribe: true, listChanged: true } });
   server.server.setRequestHandler(SubscribeRequestSchema, async (req) => {
     const uri = req.params.uri;
     if (!parseStealthUri(uri)) throw new McpError(ErrorCode.InvalidParams, `Unknown resource ${uri}.`);
     try {
-      await subs.subscribe(uri);
+      // the watcher's own log lines belong to this session
+      await logScope.run(server, () => subs.subscribe(uri));
     } catch (error) {
       throw toMcpError(error);
     }

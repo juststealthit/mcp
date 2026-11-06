@@ -85,6 +85,8 @@ interface Session {
   transport: StreamableHTTPServerTransport;
   mcp: StealthServer;
   lastSeen: number;
+  /** Requests still open, such as an SSE stream carrying resource updates. A session with one open is in use, not idle. */
+  open: number;
 }
 
 export async function startHttpServer(ctx: StealthContext, opts: HttpOptions = {}): Promise<RunningHttpServer> {
@@ -100,6 +102,7 @@ export async function startHttpServer(ctx: StealthContext, opts: HttpOptions = {
   const idleMs = opts.sessionIdleMs ?? 30 * 60_000;
   const maxBody = opts.maxBodyBytes ?? 4 * 1024 * 1024;
   const sessions = new Map<string, Session>();
+  let starting = 0;
 
   const originAllowed = (origin: string | undefined) => !origin || LOOPBACK_ORIGIN.test(origin) || allowedOrigins.has(origin.toLowerCase());
 
@@ -190,6 +193,11 @@ export async function startHttpServer(ctx: StealthContext, opts: HttpOptions = {
         return;
       }
       s.lastSeen = Date.now();
+      s.open++;
+      res.once("close", () => {
+        s.open--;
+        s.lastSeen = Date.now();
+      });
       await s.transport.handleRequest(req, res, body);
       return;
     }
@@ -197,16 +205,18 @@ export async function startHttpServer(ctx: StealthContext, opts: HttpOptions = {
       jsonRpcError(res, 400, -32000, "No session: send an initialize request first.");
       return;
     }
-    if (sessions.size >= maxSessions) {
-      jsonRpcError(res, 503, -32000, "Too many sessions open. Try again later.");
+    // sessions still initializing count too, so a burst of initialize requests can't overshoot the cap
+    if (sessions.size + starting >= maxSessions) {
+      jsonRpcError(res, 503, -32000, "Too many sessions open. Try again later.", { "retry-after": "30" });
       return;
     }
 
+    starting++;
     const mcp = createStealthServer(ctx);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
-        sessions.set(id, { transport, mcp, lastSeen: Date.now() });
+        sessions.set(id, { transport, mcp, lastSeen: Date.now(), open: 0 });
         ctx.logger.info("http session opened", { sessions: sessions.size });
       },
       onsessionclosed: (id) => {
@@ -221,8 +231,17 @@ export async function startHttpServer(ctx: StealthContext, opts: HttpOptions = {
       }
       mcp.dispose();
     };
-    await mcp.server.connect(transport);
-    await transport.handleRequest(req, res, body);
+    try {
+      await mcp.server.connect(transport);
+      await transport.handleRequest(req, res, body);
+    } finally {
+      starting--;
+      // an initialize the transport turned down (a bad protocol version, a bad header) opened no session: drop its server
+      if (!transport.sessionId || !sessions.has(transport.sessionId)) {
+        mcp.dispose();
+        await transport.close().catch(() => undefined);
+      }
+    }
   };
 
   const server = createServer((req, res) => {
@@ -236,7 +255,7 @@ export async function startHttpServer(ctx: StealthContext, opts: HttpOptions = {
 
   const sweep = setInterval(() => {
     const cutoff = Date.now() - idleMs;
-    for (const [id, s] of sessions) if (s.lastSeen < cutoff) void closeSession(id);
+    for (const [id, s] of sessions) if (s.open <= 0 && s.lastSeen < cutoff) void closeSession(id);
   }, Math.min(60_000, idleMs));
   sweep.unref();
 

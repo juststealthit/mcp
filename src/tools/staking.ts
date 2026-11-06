@@ -55,9 +55,11 @@ export function poolView(p: StakePool) {
   };
 }
 
+export const STAKING_NOT_OPEN = "Staking isn't open yet. It's built and tested, and opens soon.";
+
 export async function findPool(ctx: StealthContext, id: string, signal?: AbortSignal): Promise<StakePool> {
-  const o = await ctx.client.staking.overview({ signal });
-  if (!o.enabled) throw new RefusedError("staking_closed", "Staking isn't open yet. It's built and tested, and opens soon.");
+  const o = await ctx.client.staking.status({ signal });
+  if (o.state !== "open") throw new RefusedError("staking_closed", STAKING_NOT_OPEN);
   const p = o.pools.find((x) => x.id === id);
   if (!p) throw new NotFoundError(`No staking pool "${id}". Pools: ${o.pools.map((x) => x.id).join(", ") || "none"}.`);
   return p;
@@ -85,14 +87,24 @@ export const getStakingPools = defineTool({
   name: "get_staking_pools",
   title: "Staking pools",
   description:
-    "The $STEALTH staking pools: today's yearly rate and boosts, cooldown, the first-stake SOL deposit, total staked, stakers and what the reward pool can still pay. Rates can change and rewards stop while the reward pool is empty; nothing here promises a return.",
+    "The $STEALTH staking pools and whether staking is open (state open or not_open: it's built and tested, and opens soon): today's yearly rate and boosts, cooldown, the first-stake SOL deposit, total staked, stakers and what the reward pool can still pay. Rates can change and rewards stop while the reward pool is empty; nothing here promises a return.",
   input: {},
-  output: { enabled: z.boolean(), network: nullableString, pools: z.array(PoolViewSchema) },
+  output: {
+    state: z.enum(["open", "not_open"]).describe("not_open until staking opens: it's built and tested, and opens soon"),
+    enabled: z.boolean().describe("Same as state open"),
+    network: nullableString,
+    message: nullableString,
+    pools: z.array(PoolViewSchema),
+  },
   annotations: READ,
   async run(_a, { ctx, signal }) {
-    const o = await ctx.client.staking.overview({ signal });
+    const o = await ctx.client.staking.status({ signal });
     const pools = o.pools.map(poolView);
-    return { data: { enabled: o.enabled, network: o.network ?? null, pools }, summary: o.enabled ? `${pools.length} pool${pools.length === 1 ? "" : "s"} open.` : "Staking isn't open yet." };
+    const open = o.state === "open";
+    return {
+      data: { state: o.state, enabled: open, network: o.network, message: open ? null : STAKING_NOT_OPEN, pools },
+      summary: open ? `${pools.length} pool${pools.length === 1 ? "" : "s"} open.` : STAKING_NOT_OPEN,
+    };
   },
 });
 

@@ -89,6 +89,43 @@ describe("streamable HTTP", () => {
     expect(bad.status).toBe(400);
   });
 
+  it("keeps a session with an open stream past the idle timeout, and closes one that went quiet", async () => {
+    running = await startHttpServer(context(), { port: 0, sessionIdleMs: 60 });
+    const client = new Client({ name: "http-test", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(running.url)));
+    // the client holds its GET stream open for server notifications: that session is in use
+    await client.listTools();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(running.sessions()).toBe(1);
+    expect((await client.callTool({ name: "list_chains", arguments: {} })).isError).toBeFalsy();
+    await client.close();
+
+    // a bare initialize with nothing after it is idle
+    const r = await post(running.url, {});
+    expect(r.status).toBe(200);
+    await r.text();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(running.sessions()).toBe(0);
+  });
+
+  it("counts sessions still initializing against the cap", async () => {
+    running = await startHttpServer(context(), { port: 0, maxSessions: 2 });
+    const replies = await Promise.all(Array.from({ length: 6 }, () => post(running!.url, {})));
+    await Promise.all(replies.map((r) => r.text()));
+    expect(replies.filter((r) => r.status === 200)).toHaveLength(2);
+    expect(replies.filter((r) => r.status === 503)).toHaveLength(4);
+    expect(running.sessions()).toBe(2);
+  });
+
+  it("drops the server behind an initialize the transport turned down", async () => {
+    running = await startHttpServer(context(), { port: 0, maxSessions: 1 });
+    // no text/event-stream in accept: the transport answers 406 and opens no session
+    const bad = await fetch(running.url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(init) });
+    expect(bad.status).toBe(406);
+    // the failed one doesn't hold the only slot
+    expect((await post(running.url, {})).status).toBe(200);
+  });
+
   it("won't listen beyond loopback without a token", async () => {
     await expect(startHttpServer(context(), { port: 0, host: "0.0.0.0" })).rejects.toThrow(/without a bearer token/);
     await expect(startHttpServer(context(), { port: 0, token: "short" })).rejects.toThrow(/at least 16/);
